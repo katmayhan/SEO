@@ -1,0 +1,31 @@
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "18"
+
+# Daily GSC sync — runs at 6am UTC every day
+[functions."gsc-sync"]
+  schedule = "0 6 * * *"
+
+# Daily impact measurement check — runs at 7am UTC
+[functions."measure-impact"]
+  schedule = "0 7 * * *"
+
+[[redirects]]
+  from = "/auth/callback"
+  to = "/auth-callback.html"
+  status = 200
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
