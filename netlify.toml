@@ -1,9 +1,6 @@
 [build]
-  publish = "public"
-  functions = "netlify/functions"
-
-[build.environment]
-  NODE_VERSION = "18"
+  publish = "baboodle-seo-dashboard/public"
+  functions = "baboodle-seo-dashboard/netlify/functions"
 
 # Daily GSC sync — runs at 6am UTC every day
 [functions."gsc-sync"]
