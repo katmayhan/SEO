@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Connecting...</title>
+  <style>
+    body { font-family: system-ui; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #fafaf9; }
+    .box { text-align: center; }
+    p { color: #6b6a66; font-size: 14px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div style="font-size: 32px;">🔗</div>
+    <p id="msg">Connecting to Google Search Console...</p>
+  </div>
+  <script>
+    // Extract code from URL and send to backend
+    const code = new URLSearchParams(window.location.search).get('code');
+    if (code) {
+      fetch('/api/gsc-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'exchange_code', code }),
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          document.getElementById('msg').textContent = 'Connected! Redirecting...';
+          setTimeout(() => window.location.href = '/', 1000);
+        } else {
+          document.getElementById('msg').textContent = 'Connection failed: ' + (data.error || 'Unknown error');
+        }
+      });
+    } else {
+      document.getElementById('msg').textContent = 'No auth code found. Please try again.';
+      setTimeout(() => window.location.href = '/', 2000);
+    }
+  </script>
+</body>
+</html>
