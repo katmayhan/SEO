@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; default-src *;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Baboodle SEO Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.js"></script>
+  <style>
+    :root {
+      --bg: #fafaf9;
+      --surface: #ffffff;
+      --surface2: #f4f3f0;
+      --border: rgba(0,0,0,0.08);
+      --border-med: rgba(0,0,0,0.14);
+      --text: #1a1917;
+      --text2: #6b6a66;
+      --text3: #9e9d99;
+      --green: #3b6d11; --green-bg: #eaf3de;
+      --amber: #854f0b; --amber-bg: #faeeda;
+      --red: #a32d2d; --red-bg: #fcebeb;
+      --blue: #185fa5; --blue-bg: #e6f1fb;
+      --radius: 8px; --radius-lg: 12px;
+      --font: 'Inter', system-ui, sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111110; --surface: #1c1c1a; --surface2: #252523;
+        --border: rgba(255,255,255,0.08); --border-med: rgba(255,255,255,0.14);
+        --text: #f0ede8; --text2: #9e9d99; --text3: #6b6a66;
+        --green: #97c459; --green-bg: #173404;
+        --amber: #ef9f27; --amber-bg: #412402;
+        --red: #f09595; --red-bg: #501313;
+        --blue: #85b7eb; --blue-bg: #042c53;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+    a { color: var(--blue); text-decoration: none; }
+
+    /* Layout */
+    .app { display: flex; min-height: 100vh; }
+    .sidebar { width: 220px; background: var(--surface); border-right: 0.5px solid var(--border); padding: 20px 0; flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+    .main { flex: 1; padding: 28px; overflow-x: hidden; max-width: calc(100vw - 220px); }
+    .sidebar-logo { padding: 0 16px 20px; border-bottom: 0.5px solid var(--border); margin-bottom: 12px; }
+    .sidebar-logo .brand { font-size: 15px; font-weight: 600; color: var(--text); }
+    .sidebar-logo .sub { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.05em; }
+    .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; color: var(--text2); cursor: pointer; border-radius: 0; transition: all 0.1s; }
+    .nav-item:hover { background: var(--surface2); color: var(--text); }
+    .nav-item.active { background: var(--surface2); color: var(--text); font-weight: 500; border-left: 2px solid var(--text); }
+    .nav-icon { width: 16px; font-size: 16px; }
+    .nav-section { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; padding: 12px 16px 4px; }
+
+    /* Sections */
+    .section { display: none; }
+    .section.active { display: block; }
+    .page-header { margin-bottom: 24px; }
+    .page-title { font-size: 20px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+    .page-sub { font-size: 13px; color: var(--text2); }
+
+    /* Metrics grid */
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 24px; }
+    .metric { background: var(--surface2); border-radius: var(--radius); padding: 14px 16px; }
+    .metric-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+    .metric-value { font-size: 24px; font-weight: 600; color: var(--text); line-height: 1; }
+    .metric-delta { font-size: 11px; margin-top: 6px; }
+    .up { color: var(--green); } .down { color: var(--red); } .flat { color: var(--text3); }
+
+    /* Cards */
+    .card { background: var(--surface); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 20px; margin-bottom: 16px; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+    .card-title { font-size: 12px; font-weight: 500; color: var(--text3); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* Table */
+    .table-wrap { overflow-x: auto; margin: 0 -20px; padding: 0 20px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 8px 10px; font-size: 11px; font-weight: 500; color: var(--text3); border-bottom: 0.5px solid var(--border); white-space: nowrap; }
+    td { padding: 10px; border-bottom: 0.5px solid var(--border); color: var(--text); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface2); cursor: pointer; }
+    .mono { font-family: monospace; font-size: 12px; }
+
+    /* Badges */
+    .badge { display: inline-flex; align-items: center; font-size: 11px; padding: 3px 8px; border-radius: 20px; font-weight: 500; white-space: nowrap; }
+    .b-green { background: var(--green-bg); color: var(--green); }
+    .b-amber { background: var(--amber-bg); color: var(--amber); }
+    .b-red { background: var(--red-bg); color: var(--red); }
+    .b-blue { background: var(--blue-bg); color: var(--blue); }
+    .b-gray { background: var(--surface2); color: var(--text2); }
+
+    /* Buttons */
+    .btn { font-size: 12px; padding: 6px 12px; border-radius: var(--radius); border: 0.5px solid var(--border-med); background: transparent; color: var(--text); cursor: pointer; transition: all 0.1s; white-space: nowrap; font-family: var(--font); }
+    .btn:hover { background: var(--surface2); }
+    .btn-primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+    .btn-primary:hover { opacity: 0.85; }
+    .btn-green { background: var(--green-bg); color: var(--green); border-color: transparent; }
+
+    /* AI panel */
+    .ai-panel { background: var(--surface2); border-radius: var(--radius-lg); padding: 16px; margin-bottom: 16px; }
+    .ai-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 12px; font-weight: 500; color: var(--text2); }
+    .ai-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .ai-content { font-size: 13px; color: var(--text); line-height: 1.7; white-space: pre-wrap; }
+    .ai-loading { color: var(--text3); font-style: italic; }
+
+    /* Action items */
+    .action-item { display: flex; align-items: flex-start; gap: 12px; padding: 14px 0; border-bottom: 0.5px solid var(--border); }
+    .action-item:last-child { border-bottom: none; }
+    .action-status { display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 2px; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .s-suggested { background: var(--text3); }
+    .s-planned { background: var(--blue); }
+    .s-actioned { background: var(--amber); }
+    .s-measuring { background: var(--amber); animation: pulse 1.5s infinite; }
+    .s-complete { background: var(--green); }
+    .action-body { flex: 1; min-width: 0; }
+    .action-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
+    .action-desc { font-size: 12px; color: var(--text2); margin-bottom: 8px; line-height: 1.6; }
+    .action-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .action-btns { display: flex; gap: 6px; flex-shrink: 0; flex-direction: column; align-items: flex-end; }
+
+    /* Result card */
+    .result-card { background: var(--green-bg); border-radius: var(--radius); padding: 12px; margin-top: 8px; }
+    .result-card.neutral { background: var(--amber-bg); }
+    .result-text { font-size: 12px; color: var(--text); line-height: 1.6; }
+    .result-stats { display: flex; gap: 16px; margin-bottom: 8px; }
+    .result-stat { text-align: center; }
+    .result-stat .val { font-size: 16px; font-weight: 600; }
+    .result-stat .lbl { font-size: 10px; color: var(--text3); }
+
+    /* Page detail panel */
+    .detail-panel { position: fixed; top: 0; right: 0; width: 520px; height: 100vh; background: var(--surface); border-left: 0.5px solid var(--border); padding: 24px; overflow-y: auto; transform: translateX(100%); transition: transform 0.25s ease; z-index: 100; }
+    .detail-panel.open { transform: translateX(0); }
+    .detail-close { position: absolute; top: 16px; right: 16px; background: none; border: none; font-size: 20px; cursor: pointer; color: var(--text2); }
+    .query-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 0.5px solid var(--border); }
+    .query-row:last-child { border-bottom: none; }
+    .query-text { flex: 1; font-size: 13px; }
+    .query-bar { height: 4px; border-radius: 2px; background: var(--blue-bg); margin-top: 3px; }
+    .query-bar-fill { height: 100%; border-radius: 2px; background: var(--blue); }
+    .query-stat { font-size: 12px; color: var(--text3); min-width: 36px; text-align: right; }
+
+    /* Two col */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media(max-width:900px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* Auth screen */
+    .auth-screen { max-width: 480px; margin: 80px auto; text-align: center; }
+    .auth-screen h2 { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+    .auth-screen p { font-size: 14px; color: var(--text2); margin-bottom: 24px; line-height: 1.7; }
+    .auth-btn { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; padding: 12px 24px; border-radius: var(--radius); border: 0.5px solid var(--border-med); background: var(--surface); color: var(--text); cursor: pointer; font-family: var(--font); transition: all 0.1s; }
+    .auth-btn:hover { background: var(--surface2); }
+
+    /* Score circle */
+    .score { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+    .score-g { background: var(--green-bg); color: var(--green); }
+    .score-a { background: var(--amber-bg); color: var(--amber); }
+    .score-r { background: var(--red-bg); color: var(--red); }
+
+    /* Overlay */
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 99; display: none; }
+    .overlay.show { display: block; }
+
+    .empty { text-align: center; padding: 40px 20px; color: var(--text3); font-size: 13px; }
+    .loading { color: var(--text3); font-size: 13px; padding: 20px 0; }
+
+    .tabs { display: flex; gap: 0; border-bottom: 0.5px solid var(--border); margin-bottom: 16px; }
+    .tab { font-size: 13px; padding: 8px 16px; border: none; background: transparent; cursor: pointer; color: var(--text2); border-bottom: 2px solid transparent; margin-bottom: -1px; font-family: var(--font); }
+    .tab.active { color: var(--text); border-bottom-color: var(--text); font-weight: 500; }
+
+    .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .bar-label { font-size: 12px; color: var(--text2); width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bar-track { flex: 1; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 3px; background: var(--blue); }
+    .bar-val { font-size: 12px; color: var(--text2); min-width: 32px; text-align: right; }
+  </style>
+</head>
+<body>
+
+<div id="authScreen" class="auth-screen" style="display:none;">
+  <div style="font-size: 32px; margin-bottom: 16px;">🔍</div>
+  <h2>Connect Google Search Console</h2>
+  <p>Sign in with the Google account that owns baboodle.co.uk in Search Console to start pulling your live rankings, queries, and click data.</p>
+  <button class="auth-btn" onclick="startAuth()">
+    <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>
+    Sign in with Google
+  </button>
+  <p style="margin-top: 16px; font-size: 12px; color: var(--text3);">Read-only access to Search Console data. Your credentials are stored securely in Supabase.</p>
+</div>
+
+<div id="app" class="app" style="display:none;">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="brand">Baboodle</div>
+      <div class="sub">SEO & AEO Dashboard</div>
+    </div>
+    <div class="nav-section">Analytics</div>
+    <div class="nav-item active" onclick="showSection('overview',this)"><span class="nav-icon">📊</span> Overview</div>
+    <div class="nav-item" onclick="showSection('pages',this)"><span class="nav-icon">📄</span> Pages</div>
+    <div class="nav-section">Optimisation</div>
+    <div class="nav-item" onclick="showSection('actions',this)"><span class="nav-icon">✅</span> Action plan</div>
+    <div class="nav-item" onclick="showSection('content',this)"><span class="nav-icon">✏️</span> Content plan</div>
+    <div class="nav-section">AI Visibility</div>
+    <div class="nav-item" onclick="showSection('aeo',this)"><span class="nav-icon">🤖</span> AI visibility</div>
+    <div class="nav-section">Settings</div>
+    <div class="nav-item" onclick="showSection('settings',this)"><span class="nav-icon">⚙️</span> Settings</div>
+    <div style="padding: 16px; margin-top: auto; border-top: 0.5px solid var(--border); font-size: 11px; color: var(--text3);">
+      <div id="syncStatus">Last sync: checking...</div>
+      <button class="btn" style="margin-top: 8px; width: 100%; font-size: 11px;" onclick="triggerSync()">Sync now</button>
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <!-- OVERVIEW -->
+    <div id="overview" class="section active">
+      <div class="page-header">
+        <div class="page-title">Overview</div>
+        <div class="page-sub">baboodle.co.uk · Last 28 days</div>
+      </div>
+      <div class="metrics" id="overviewMetrics"><div class="loading">Loading metrics...</div></div>
+      <div class="ai-panel">
+        <div class="ai-header"><div class="ai-dot"></div> AI analysis</div>
+        <div class="ai-content ai-loading" id="overviewAI">Analysing your SEO performance...</div>
+      </div>
+      <div class="two-col">
+        <div class="card">
+          <div class="card-header"><div class="card-title">Top pages by clicks</div></div>
+          <div id="topPages"><div class="loading">Loading...</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div class="card-title">Biggest opportunities</div></div>
+          <div id="opportunities"><div class="loading">Loading...</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGES -->
+    <div id="pages" class="section">
+      <div class="page-header">
+        <div class="page-title">Pages</div>
+        <div class="page-sub">Click any page to see search queries and get AI recommendations</div>
+      </div>
+      <div class="card" style="padding: 0; overflow: hidden;">
+        <div class="table-wrap">
+          <table id="pagesTable">
+            <thead><tr>
+              <th>Page</th><th>Score</th><th>Clicks</th><th>Impressions</th><th>Avg pos</th><th>CTR</th><th>Priority</th>
+            </tr></thead>
+            <tbody id="pagesBody"><tr><td colspan="7" class="loading" style="padding:20px;">Loading pages...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ACTIONS -->
+    <div id="actions" class="section">
+      <div class="page-header">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px;">
+          <div>
+            <div class="page-title">Action plan</div>
+            <div class="page-sub" id="actionsProgress">Loading actions...</div>
+          </div>
+          <button class="btn btn-primary" onclick="generateActions()">✦ Generate new actions</button>
+        </div>
+      </div>
+      <div class="tabs">
+        <button class="tab active" onclick="filterActions('all',this)">All</button>
+        <button class="tab" onclick="filterActions('suggested',this)">Suggested</button>
+        <button class="tab" onclick="filterActions('planned',this)">Planned</button>
+        <button class="tab" onclick="filterActions('measuring',this)">Measuring</button>
+        <button class="tab" onclick="filterActions('complete',this)">Complete</button>
+      </div>
+      <div id="actionsList"><div class="loading">Loading actions...</div></div>
+    </div>
+
+    <!-- CONTENT PLAN -->
+    <div id="content" class="section">
+      <div class="page-header">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px;">
+          <div>
+            <div class="page-title">Content plan</div>
+            <div class="page-sub">Blog posts, landing pages, and guides to close keyword gaps</div>
+          </div>
+          <button class="btn btn-primary" onclick="generateContentIdeas()">✦ Generate content ideas</button>
+        </div>
+      </div>
+      <div id="contentList"><div class="loading">Loading content plan...</div></div>
+    </div>
+
+    <!-- AEO -->
+    <div id="aeo" class="section">
+      <div class="page-header">
+        <div class="page-title">AI visibility (AEO)</div>
+        <div class="page-sub">Queries where Baboodle should appear in AI-generated answers</div>
+      </div>
+      <div class="ai-panel">
+        <div class="ai-header"><div class="ai-dot"></div> AEO analysis</div>
+        <div class="ai-content" id="aeoAI">AI visibility analysis loading...</div>
+      </div>
+      <div id="aeoList"><div class="loading">Loading AEO queries...</div></div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div id="settings" class="section">
+      <div class="page-header">
+        <div class="page-title">Settings</div>
+        <div class="page-sub">Data sources and configuration</div>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">Google Search Console</div></div>
+        <div id="gscStatus" style="font-size:13px; color: var(--text2);">Checking connection...</div>
+        <button class="btn" style="margin-top:12px;" onclick="startAuth()">Reconnect GSC</button>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">Data sync</div></div>
+        <p style="font-size:13px; color:var(--text2); margin-bottom:12px;">GSC data syncs automatically every day at 6am UTC. You can also trigger a manual sync.</p>
+        <button class="btn" onclick="triggerSync()">Trigger manual sync</button>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Page detail panel -->
+<div class="overlay" id="overlay" onclick="closeDetail()"></div>
+<div class="detail-panel" id="detailPanel">
+  <button class="detail-close" onclick="closeDetail()">✕</button>
+  <div id="detailContent"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
