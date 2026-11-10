@@ -1,6 +1,10 @@
 // Weekly analysis: turns Search Console + site scan + AI checks into suggestions per tab,
 // blog ideas with a full strategy, alt-text proposals, and measures changes made 28+ days ago.
-const { db, json, isJobCall, startRun, endRun, claude, claudeText, parseJSON, MODEL_MAIN, MODEL_FAST, BRAND_BRIEF } = require('../../lib/shared');
+const { db, json, isJobCall, startRun, endRun, claude, claudeJSON, claudeText, parseJSON, MODEL_MAIN, MODEL_FAST, BRAND_BRIEF } = require('../../lib/shared');
+
+const SUG_SCHEMA = { type: 'object', properties: { suggestions: { type: 'array', items: { type: 'object', properties: { category: { type: 'string', enum: ['keywords', 'onpage', 'meta', 'technical', 'aeo'] }, title: { type: 'string' }, detail: { type: 'string' }, page_url: { type: ['string', 'null'] }, priority: { type: 'string', enum: ['high', 'medium', 'low'] }, effort_minutes: { type: 'integer' }, proposed: { type: 'object' } }, required: ['category', 'title', 'detail', 'priority', 'effort_minutes'] } } }, required: ['suggestions'] };
+const ALT_SCHEMA = { type: 'object', properties: { alts: { type: 'array', items: { type: 'object', properties: { i: { type: 'integer' }, alt: { type: 'string' } }, required: ['i', 'alt'] } } }, required: ['alts'] };
+const PLAN_SCHEMA = { type: 'object', properties: { summary: { type: 'string' }, items: { type: 'array', items: { type: 'object', properties: { type: { type: 'string', enum: ['suggestion', 'blog', 'alert', 'alt_text'] }, ref_id: { type: ['string', 'null'] }, title: { type: 'string' }, why: { type: 'string' }, minutes: { type: 'integer' }, steps: { type: 'array', items: { type: 'string' } } }, required: ['type', 'title', 'why', 'minutes'] } } }, required: ['summary', 'items'] };
 
 const BOOKING_RATE = Number(process.env.BOOKING_RATE || 0.026); // search visitors who book (Shopify, pram hire, Oct–Nov 2026)
 const CTR_AT = [0, 0.28, 0.16, 0.11, 0.08, 0.065, 0.05, 0.04, 0.032, 0.027, 0.023];
@@ -45,11 +49,11 @@ async function altText() {
   const { data: pages } = await db.from('pages').select('url,title,h1').in('url', [...new Set(todo.map((t) => t.page_url))]);
   const pmap = Object.fromEntries((pages || []).map((p) => [p.url, p]));
   const list = todo.map((t, i) => `${i}. page "${(pmap[t.page_url] || {}).h1 || (pmap[t.page_url] || {}).title || t.page_url}" · file ${t.src.split('/').pop()}`).join('\n');
-  const r = await claude({
-    model: MODEL_FAST, max_tokens: 3000,
-    messages: [{ role: 'user', content: `Write alt text (max 110 characters, British English, describe what is in the image, mention the product name, add "to hire" only where natural, no "image of") for each image on baboodle.co.uk. Reply as JSON {"alts":[{"i":0,"alt":"..."}]}.\n${list}` }],
+  const altOut = await claudeJSON({
+    model: MODEL_FAST, max_tokens: 4000, schema: ALT_SCHEMA,
+    messages: [{ role: 'user', content: `Write alt text (max 110 characters, British English, describe what is in the image, mention the product name, add "to hire" only where natural, no "image of") for each image on baboodle.co.uk, keyed by its number i.\n${list}` }],
   });
-  const alts = parseJSON(claudeText(r)).alts || [];
+  const alts = altOut.alts || [];
   const rows = alts.filter((a) => todo[a.i]).map((a) => ({
     category: 'images', priority: 'low', page_url: todo[a.i].page_url,
     title: `Alt text for ${todo[a.i].src.split('/').pop().slice(0, 60)}`,
@@ -102,12 +106,12 @@ exports.handler = async (event) => {
     let sugs = [], blogs = [], alts = 0;
     // 1) Suggestions for each tab
     try {
-    const sResp = await claude({
-      model: MODEL_MAIN, max_tokens: 16000,
+    const sOut = await claudeJSON({
+      model: MODEL_MAIN, max_tokens: 16000, schema: SUG_SCHEMA,
       system: BRAND_BRIEF + '\nYou are Baboodle\'s SEO and AEO strategist. Be specific: name the page, the search, the number. Prioritise by likely extra bookings. Do not repeat open suggestions or suggest undoing recent changes. Note: Search Console has no search-volume data, impressions are your demand signal.',
       messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 10–15 new suggestions (keep each detail under 60 words and copy under 120 words) across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect","page_url":"/path or null","priority":"high|medium|low","effort_minutes":15,"proposed":{}}]}  (effort_minutes = realistic time for Katie to do it herself in Shopify, 5–90)` }],
     });
-    sugs = (parseJSON(claudeText(sResp)).suggestions || []).filter((s) => s.title && s.category);
+    sugs = (sOut.suggestions || []).filter((s) => s.title && s.category);
     if (sugs.length) await db.from('suggestions').insert(sugs.map((s) => ({ category: s.category, title: s.title, detail: s.detail, page_url: s.page_url || null, priority: s.priority || 'medium', effort_minutes: s.effort_minutes || null, proposed: s.proposed || {} })));
 
     } catch (e) { errors.push('suggestions: ' + e.message); }
@@ -149,12 +153,11 @@ exports.handler = async (event) => {
     const { count: altCount } = await db.from('suggestions').select('id', { count: 'exact', head: true }).eq('category', 'images').eq('status', 'suggested');
     const { data: ideas } = await db.from('blog_ideas').select('id,title,status,expected_bookings,target_page').in('status', ['idea', 'draft_ready']).order('expected_bookings', { ascending: false }).limit(8);
     const { data: openAlerts } = await db.from('alerts').select('id,title,detail,severity').eq('resolved', false).order('created_at', { ascending: false }).limit(10);
-    const pResp = await claude({
-      model: MODEL_MAIN, max_tokens: 3000,
+    const plan = await claudeJSON({
+      model: MODEL_MAIN, max_tokens: 4000, schema: PLAN_SCHEMA,
       system: BRAND_BRIEF + '\nYou plan Katie\'s SEO and AEO week. She has exactly 3 hours (180 minutes) a week. Pick the highest-impact work that fits, in the order she should do it. Fix urgent problems first, then quick wins with the most expected extra bookings, then one bigger piece (usually a blog). Batch small similar jobs (e.g. "25 alt texts, 20 min").',
       messages: [{ role: 'user', content: `Open alerts: ${JSON.stringify(openAlerts)}\nOpen suggestions (with effort in minutes): ${JSON.stringify(openNow)}\nAlt texts waiting: ${altCount}\nBlog ideas (a blog takes ~60 min to review and publish once drafted; drafting is automatic): ${JSON.stringify(ideas)}\n\nReply as JSON {"summary":"one or two sentences on the focus this week","items":[{"type":"suggestion|blog|alert|alt_text","ref_id":"id or null","title":"","why":"one sentence with the expected effect","minutes":20,"steps":["short step"]}]} with total minutes ≤ 180.` }],
     });
-    const plan = parseJSON(claudeText(pResp));
     const monday = new Date(); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
     await db.from('weekly_plans').upsert({ week_of: monday.toISOString().slice(0, 10), budget_minutes: 180, summary: plan.summary || '', items: plan.items || [], emailed_at: null }, { onConflict: 'week_of' });
     } catch (e) { errors.push('plan: ' + e.message); }

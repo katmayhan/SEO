@@ -156,6 +156,7 @@
     const todoTotal = Object.values(o.todo || {}).reduce((x, y) => x + y, 0);
     v.innerHTML = `
       <div class="head"><div><h1>How we're doing this week</h1><p class="soft">${day(w.from)} – ${day(w.to)} vs ${day(w.prev_from)} – ${day(w.prev_to)} · Google data lags by about 2 days</p></div></div>
+      ${Object.values(o.runs || {}).some((r) => /credit balance/i.test(r.message || '')) ? '<div class="notice notice--coral"><span><b>Your Claude API credit has run out.</b> The chat, the AI-mentions check and the weekly analysis are paused until it\'s topped up at console.anthropic.com → Plans &amp; Billing.</span></div>' : ''}
       ${(o.alerts || []).map((al) => `<div class="notice ${al.severity === 'urgent' ? 'notice--coral' : ''}"><span><b>${esc(al.title)}</b>${al.detail ? ' · ' + esc(al.detail) : ''}</span><span style="display:flex;gap:6px;align-items:center">${ask(`Alert: ${al.title}. ${al.detail || ''}`)}<button class="btn btn--sm" data-alert="${al.id}">Got it</button></span></div>`).join('')}
       ${planHTML(o.plan)}
       <div class="grid g4">
