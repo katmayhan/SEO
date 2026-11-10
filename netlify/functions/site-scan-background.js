@@ -7,9 +7,18 @@ const { siteAlerts } = require('../../lib/alerts');
 const MAX_PAGES = 700;
 const UA = 'BaboodleSearchBrain/1.0 (+https://baboodleseo.netlify.app)';
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function get(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'manual' });
-  return { status: res.status, location: res.headers.get('location'), text: res.status === 200 ? await res.text() : '' };
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'manual' });
+    if (res.status === 429 || res.status === 503) { // Shopify rate limit: back off and retry
+      const wait = Number(res.headers.get('retry-after')) * 1000 || 2000 * (attempt + 1);
+      await sleep(Math.min(wait, 15000));
+      continue;
+    }
+    return { status: res.status, location: res.headers.get('location'), text: res.status === 200 ? await res.text() : '' };
+  }
+  return { status: 429, location: null, text: '', rateLimited: true };
 }
 
 async function sitemapUrls() {
@@ -117,6 +126,8 @@ exports.handler = async (event) => {
         const url = urls[i++];
         try {
           const r = await get(url);
+          await sleep(350);
+          if (r.rateLimited) continue; // couldn't check it this time; keep last week's result
           if (r.status !== 200) {
             rows.push({ url: toPath(url), page_type: pageType(toPath(url)), status: r.status, issues: [{ sev: 'high', code: 'status', text: `Returns ${r.status}${r.location ? ' → ' + toPath(r.location) : ''} but is in the sitemap` }], last_scanned: new Date().toISOString() });
             continue;
@@ -130,7 +141,7 @@ exports.handler = async (event) => {
         }
       }
     }
-    await Promise.all(Array.from({ length: 6 }, worker));
+    await Promise.all(Array.from({ length: 3 }, worker));
 
     // duplicate titles / descriptions
     const byTitle = {}, byMeta = {};
