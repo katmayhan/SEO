@@ -167,6 +167,7 @@ exports.handler = async (event) => {
         if (q.category) qb = qb.eq('category', q.category);
         if (q.status) qb = qb.in('status', q.status.split(','));
         const { data } = await qb;
+        (data || []).forEach((r) => { r.apply_kind = shop.applyKind(r); });
         return json(200, { rows: data || [] });
       }
       if (action === 'blogs') {

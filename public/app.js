@@ -92,7 +92,8 @@
   }
 
   // ---------- suggestion cards (shared by tabs) ----------
-  const canApply = (s) => ['images', 'meta'].includes(s.category) && !s.applied_at;
+  const canApply = (s) => !!s.apply_kind && !s.applied_at;
+  const applyLabel = (s) => s.apply_kind === 'copy' ? 'Add to page' : 'Apply to Shopify';
   function proposedHTML(s) {
     const p = s.proposed || {};
     const parts = [];
@@ -100,7 +101,7 @@
     if (p.current_title || p.title) parts.push(`${p.current_title ? `<div class="was">${esc(p.current_title)}</div>` : ''}${p.title ? `<div class="now"${ed('title')}>${esc(p.title)}</div>` : ''}`);
     if (p.current_description || p.description) parts.push(`${p.current_description ? `<div class="was">${esc(p.current_description)}</div>` : ''}${p.description ? `<div class="now"${ed('description')}>${esc(p.description)}</div>` : ''}`);
     if (p.alt) parts.push(`<div class="now"${ed('alt')}>${esc(p.alt)}</div><div class="url">${esc(p.src)}</div>`);
-    if (p.copy) parts.push(esc(p.copy));
+    if (p.copy) parts.push(`<div${ed('copy')} style="white-space:pre-wrap">${esc(p.copy)}</div>${canApply(s) && /\[[^\]]{3,}\]/.test(p.copy) ? '<div class="tiny" style="color:var(--coral);margin-top:4px">Check the [note in brackets], then delete it before adding this to the page.</div>' : ''}`);
     const rest = Object.entries(p).filter(([k]) => !['current_title', 'title', 'current_description', 'description', 'alt', 'src', 'copy'].includes(k));
     rest.forEach(([k, v]) => parts.push(`<b>${esc(k.replace(/_/g, ' '))}:</b> ${esc(typeof v === 'string' ? v : JSON.stringify(v))}`));
     return parts.length ? `<div class="proposed">${parts.join('<br>')}</div>` : '';
@@ -128,7 +129,7 @@
         <div class="item__actions">
           ${s.status !== 'suggested' ? pill(s.status) : ''}
           ${ask(`Suggestion (${s.category}, ${s.priority} priority${s.page_url ? ', page ' + s.page_url : ''}): "${s.title}". ${s.detail || ''} ${s.proposed && Object.keys(s.proposed).length ? 'Proposed: ' + JSON.stringify(s.proposed) : ''} Talk me through exactly how to do this.`)}
-          ${canApply(s) ? '<button class="btn btn--sm btn--coral" data-act="apply" title="Changes it live on baboodle.co.uk now. You can undo it.">Apply to Shopify</button>' : ''}
+          ${canApply(s) ? `<button class="btn btn--sm btn--coral" data-act="apply" title="${s.apply_kind === 'copy' ? 'Adds this copy to the end of the page on baboodle.co.uk now' : 'Changes it live on baboodle.co.uk now'}. You can undo it.">${applyLabel(s)}</button>` : ''}
           ${copyText(s) ? '<button class="btn btn--sm" data-act="copy">Copy</button>' : ''}
           ${s.status === 'suggested' && !canApply(s) ? '<button class="btn btn--sm" data-act="approved">Approve</button>' : ''}
           <button class="btn btn--sm ${canApply(s) ? '' : 'btn--coral'}" data-act="done" title="${canApply(s) ? 'Use this if you changed it in Shopify yourself' : 'Logs it as a change so its impact is measured'}">Mark done</button>
@@ -152,7 +153,7 @@
           await post(b.dataset.act === 'apply' ? 'apply' : 'undo-apply', { id: s.id, proposed: Object.keys(edits).length ? edits : undefined });
           toast(b.dataset.act === 'apply' ? 'Live on baboodle.co.uk. Undo it under "Applied in Shopify".' : 'Undone. Shopify is back to how it was.');
           reload();
-        } catch (err) { toast(err.message); b.disabled = false; b.textContent = b.dataset.act === 'apply' ? 'Apply to Shopify' : 'Undo'; }
+        } catch (err) { toast(err.message); b.disabled = false; b.textContent = b.dataset.act === 'apply' ? applyLabel(s) : 'Undo'; }
         return;
       }
       try {
@@ -296,7 +297,7 @@
   };
 
   async function suggestionTab(v, cat, title, intro, extra) {
-    const applies = ['images', 'meta'].includes(cat);
+    const applies = true;
     const [sug, done, st, applied] = await Promise.all([
       api('suggestions', { category: cat, status: 'suggested,approved' }), extra ? extra() : null,
       applies ? api('shopify-status').catch(() => ({ connected: false })) : null,
@@ -312,7 +313,7 @@
     v.innerHTML = `<div class="head"><div><h1>${esc(title)}</h1><p class="soft">${esc(intro)}</p></div>${bulk}</div>${banner}
       <div class="card" id="sl"><h3>Suggestions</h3>${suggestionList(sug.rows, 'New suggestions arrive every Monday, or press "Run weekly check now".')}</div>
       ${appliedRows.length ? `<div class="section card" id="al"><h3>Applied in Shopify</h3><div class="list">${appliedRows.map((r) => `<div class="item" data-sid="${r.id}"><div>${pill('done', 'Live')}</div><div class="item__main"><div class="item__title">${esc(r.title)}</div><div class="item__meta">${esc(ago(r.applied_at))}${r.page_url ? ' · ' + esc(r.page_url) : ''}</div>
-        <div class="proposed">${r.applied.old && (r.applied.old.alt != null) ? `<div class="was">${esc(r.applied.old.alt || '(no alt text)')}</div><div class="now">${esc(r.applied.now.alt)}</div>` : `<div class="was">${esc((r.applied.old || {}).title || '(none)')}</div><div class="now">${esc((r.applied.now || {}).title || '')}</div>`}</div></div>
+        <div class="proposed">${r.applied.kind === 'body' ? `<div class="now">Added: ${esc(String((r.applied.now || {}).added || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 220))}</div>` : r.applied.old && (r.applied.old.alt != null) ? `<div class="was">${esc(r.applied.old.alt || '(no alt text)')}</div><div class="now">${esc(r.applied.now.alt)}</div>` : `<div class="was">${esc((r.applied.old || {}).title || '(none)')}</div><div class="now">${esc((r.applied.now || {}).title || '')}</div>`}</div></div>
         <div class="item__actions"><button class="btn btn--sm btn--ghost" data-act="undo">Undo</button></div></div>`).join('')}</div></div>` : ''}
       <div id="extra"></div>`;
     wireSuggestions($('#sl'), sug.rows, () => go(cat));
@@ -327,7 +328,7 @@
   }
 
   VIEWS.onpage = async (v) => {
-    const p = await suggestionTab(v, 'onpage', 'On-page content', 'Pages checked against the searches they should win: words used, headings, FAQs and links.', () => api('pages'));
+    const p = await suggestionTab(v, 'onpage', 'On-page content', 'Pages checked against the searches they should win: words used, headings, FAQs and links. Click any suggested copy to edit it, then "Add to page" puts it at the end of that page in Shopify (undo any time).', () => api('pages'));
     const rows = (p.pages || []).filter((x) => ['collection', 'page', 'home', 'blog'].includes(x.page_type) && x.status === 200).sort((a, b) => ((b.m && b.m.impressions) || 0) - ((a.m && a.m.impressions) || 0));
     $('#extra').innerHTML = `<div class="section card"><h3>Content pages</h3><div class="tablewrap"><table><thead><tr><th>Page</th><th>Main heading</th><th class="num">Words</th><th>FAQs</th><th class="num">Links in</th><th class="num">Shown (28d)</th><th class="num">Position</th><th></th></tr></thead><tbody>
       ${rows.slice(0, 150).map((x) => `<tr><td><a href="https://baboodle.co.uk${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a></td><td>${esc(x.h1 || '—')}</td><td class="num ${x.word_count < 250 ? 'down' : ''}">${n0(x.word_count)}</td><td>${x.has_faq_schema ? pill('cited', 'Yes') : pill('low', 'No')}</td><td class="num ${!x.internal_links_in ? 'down' : ''}">${n0(x.internal_links_in)}</td><td class="num">${n0(x.m && x.m.impressions)}</td><td class="num">${pos(x.m && x.m.pos)}</td><td>${ask(`Page ${x.url}: H1 "${x.h1 || 'none'}", ${x.word_count} words, FAQs ${x.has_faq_schema ? 'yes' : 'no'}, ${x.internal_links_in} links in from other pages, shown ${x.m ? x.m.impressions : 0} times in 28 days at position ${pos(x.m && x.m.pos)}. Issues: ${(x.issues || []).map((i) => i.text).join('; ') || 'none'}. How do I improve this page's content?`)}</td></tr>`).join('') || '<tr><td colspan="8" class="soft">The site scan hasn\'t run yet.</td></tr>'}

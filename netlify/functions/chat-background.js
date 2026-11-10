@@ -1,6 +1,7 @@
 // "Ask Claude" chat: answers Katie's questions from the dashboard's live data (and the web when useful).
 // Runs as a background function; the browser polls for the reply.
 const { db, json, isJobCall, claude, MODEL_MAIN, BRAND_BRIEF, strategyBrief } = require('../../lib/shared');
+const shop = require('../../lib/shopify');
 
 const iso = (d) => new Date(d).toISOString().slice(0, 10);
 const addDays = (d, n) => iso(new Date(new Date(d).getTime() + n * 864e5));
@@ -22,6 +23,8 @@ const TOOLS = [
   { name: 'suggestions', description: 'Suggestions the dashboard has made (category: keywords, onpage, meta, technical, images, aeo; status: suggested, approved, done, dismissed), including measured results.', input_schema: { type: 'object', properties: { category: { type: 'string' }, status: { type: 'string' }, limit: { type: 'integer' } } } },
   { name: 'changes', description: 'Changes Katie has logged on the site, with 7 days before vs after clicks for that page.', input_schema: { type: 'object', properties: {} } },
   { name: 'ai_mentions', description: 'Latest AI-answer checks: for each parent question, whether Claude cited Baboodle, mentioned it, or named competitors instead.', input_schema: { type: 'object', properties: {} } },
+  { name: 'shopify_read_page', description: 'Read a live product, collection, page or blog post from Shopify: its current Google (SEO) title, description and the page copy. Use before proposing a change to it.', input_schema: { type: 'object', properties: { page_url: { type: 'string', description: 'e.g. /products/out-n-about-nipper-double' } }, required: ['page_url'] } },
+  { name: 'shopify_apply', description: 'Change the live site in Shopify: set the Google (SEO) title and/or description of a product, collection, page or blog post; add copy (paragraphs, an FAQ, a heading) to the end of its description/body; or set an image\'s alt text. Saves the old value so Katie can undo it from the dashboard. ONLY call after you have shown Katie the exact wording and she has clearly said yes (e.g. "apply it", "yes do it") in this conversation.', input_schema: { type: 'object', properties: { page_url: { type: 'string' }, title: { type: 'string', description: 'new SEO title, ≤60 characters' }, description: { type: 'string', description: 'new meta description, ≤155 characters' }, copy: { type: 'string', description: 'copy to add to the end of the page. Plain text: blank lines between paragraphs, "## " for a heading, "- " for bullets. No [notes].' }, image_src: { type: 'string' }, alt: { type: 'string' }, summary: { type: 'string', description: 'one-line description of the change, for the change log' } }, required: ['summary'] } },
   { name: 'save_action', description: 'Save an action as a suggestion in the dashboard so it appears in its tab and can go into the weekly plan. ONLY use when Katie asks to save/add it.', input_schema: { type: 'object', properties: { category: { type: 'string', enum: ['keywords', 'onpage', 'meta', 'technical', 'images', 'aeo'] }, title: { type: 'string' }, detail: { type: 'string' }, page_url: { type: 'string' }, priority: { type: 'string', enum: ['high', 'medium', 'low'] }, effort_minutes: { type: 'integer' }, proposed: { type: 'object', description: 'e.g. {title, description, copy}' } }, required: ['category', 'title', 'detail'] } },
   { name: 'blog_ideas', description: 'Blog ideas with their strategy, expected bookings and status, and this week\'s 3-hour plan.', input_schema: { type: 'object', properties: {} } },
 ];
@@ -112,6 +115,30 @@ async function runTool(name, input = {}) {
       (cs || []).forEach((c) => { if (!latest[c.question_id]) latest[c.question_id] = c; });
       return (qs || []).map((q) => ({ question: q.question, ...(latest[q.id] || { status: 'not checked' }) }));
     }
+    case 'shopify_read_page': {
+      try { return await shop.readPage(input.page_url); } catch (e) { return { error: e.message }; }
+    }
+    case 'shopify_apply': {
+      const cat = input.image_src ? 'images' : (input.title || input.description) ? 'meta' : 'onpage';
+      const proposed = input.image_src ? { src: input.image_src, alt: input.alt } : (input.title || input.description) ? { title: input.title, description: input.description } : { copy: input.copy };
+      const { data: s, error } = await db.from('suggestions').insert({ category: cat, title: input.summary, detail: 'Applied from the chat', page_url: input.page_url || null, priority: 'medium', proposed, status: 'approved' }).select('*').single();
+      if (error) return { error: error.message };
+      try {
+        const applied = await shop.applySuggestion(s);
+        await db.from('suggestions').update({ status: 'done', actioned_at: new Date().toISOString(), applied, applied_at: new Date().toISOString() }).eq('id', s.id);
+        if (cat !== 'images') await db.from('changes').insert({ date: iso(new Date()), page_url: input.page_url || null, description: 'Applied in Shopify: ' + input.summary, source: 'shopify', suggestion_id: s.id });
+        // copy and meta both on one go: apply the copy as a second change
+        if (input.copy && (input.title || input.description)) {
+          const { data: s2 } = await db.from('suggestions').insert({ category: 'onpage', title: input.summary + ' (copy)', detail: 'Applied from the chat', page_url: input.page_url, priority: 'medium', proposed: { copy: input.copy }, status: 'approved' }).select('*').single();
+          const a2 = await shop.applySuggestion(s2);
+          await db.from('suggestions').update({ status: 'done', actioned_at: new Date().toISOString(), applied: a2, applied_at: new Date().toISOString() }).eq('id', s2.id);
+        }
+        return { applied: true, old: applied.old, now: applied.now && (applied.now.title || applied.now.alt || applied.now.added), note: 'Live on baboodle.co.uk now. Katie can undo it under "Applied in Shopify" on the ' + (cat === 'images' ? 'Images' : cat === 'meta' ? 'Meta titles' : 'On-page content') + ' tab.' };
+      } catch (e) {
+        await db.from('suggestions').update({ apply_error: e.message.slice(0, 300) }).eq('id', s.id);
+        return { error: e.message };
+      }
+    }
     case 'save_action': {
       const { data, error } = await db.from('suggestions').insert({ category: input.category, title: input.title, detail: input.detail, page_url: input.page_url || null, priority: input.priority || 'medium', effort_minutes: input.effort_minutes || null, proposed: input.proposed || {}, status: 'approved' }).select('id').single();
       return error ? { error: error.message } : { saved: true, id: data.id, note: 'Saved as an approved suggestion in the ' + input.category + ' tab.' };
@@ -140,10 +167,12 @@ Answer from the data: call the tools to look things up before answering anything
 Keep answers short and scannable: lead with the answer, then the evidence, then what to do (with rough minutes).
 When Katie asks "what should I do about this" for an item from the dashboard, first look it up (e.g. page_performance and page_scan for the page, search_keywords for the search, web search for what ranks for it now), then answer in this shape:
 **What to do** – the single best action, specific to this item (which page, which section, what to change).
-**How** – 3–6 numbered steps she can do herself in Shopify, including ready-to-paste copy where it helps (a new Google title ≤60 characters, description ≤155, a heading, an FAQ, a paragraph, link text and where to put the link).
+**How** – 3–6 numbered steps, including the exact copy (a new Google title ≤60 characters, description ≤155, a heading, an FAQ, a paragraph, link text and where to put the link). Use shopify_read_page first so you work from what's live now.
 **Time** – rough minutes.
 **Expected outcome** – what should move (position, clicks, click rate, AI mentions), roughly how much and how soon, and how she'll see it in the dashboard. Be honest when the opportunity is small or the data is thin, and say if a different page should own the search, or if it's not worth her time.
-End with one line: "Say **save it** and I'll add this to your suggestions." If she says save it, call save_action with the action (put paste-ready copy in proposed). British English, plain words, no SEO jargon without a short explanation. Use **bold** and simple lists; no tables wider than 4 columns.`;
+You CAN change the live site yourself with shopify_apply: Google titles and descriptions for products, collections, pages and blog posts, adding copy or FAQs to the end of those pages, and image alt text. Never tell Katie she has to paste these in by hand. Things you can't do yet: theme/section text, menus and links inside existing copy, redirects, homepage title (Online Store → Preferences) – for those give her the steps.
+Never put facts you haven't checked (ages, weights, sizes, prices) into copy you apply: check them on the live page with shopify_read_page or the web first, or leave them out.
+End with one line: "Say **apply it** and I'll make the change on the site now, or **save it** to add it to your suggestions." Only call shopify_apply after she clearly says yes in this conversation; then confirm what changed and that it can be undone from the tab. If she says save it, call save_action (put the exact copy in proposed). British English, plain words, no SEO jargon without a short explanation. Use **bold** and simple lists; no tables wider than 4 columns.`;
 
     let answer = '';
     for (let turn = 0; turn < 12; turn++) {
