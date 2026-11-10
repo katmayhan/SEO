@@ -1,122 +1,40 @@
-// netlify/functions/gsc-auth.js
-// Handles Google Search Console OAuth flow
-// Exchanges auth code for tokens and stores in Supabase
+// Connect Google Search Console (read-only) with the existing OAuth client.
+// /api/gsc-auth?key=PASSWORD  → sends you to Google
+// /auth/callback (rewritten here) → stores the tokens, starts the first sync
+const crypto = require('crypto');
+const { db, DASH_URL, trigger } = require('../../lib/shared');
 
-const { createClient } = require('@supabase/supabase-js');
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+const REDIRECT = `${DASH_URL}/auth/callback`;
+const state = () => crypto.createHmac('sha256', process.env.JOB_SECRET || 'x').update('gsc-connect').digest('hex').slice(0, 32);
+const redirect = (to) => ({ statusCode: 302, headers: { Location: to, 'Cache-Control': 'no-store' }, body: '' });
 
 exports.handler = async (event) => {
-  const headers = {
-    'Access-Control-Allow-Origin': process.env.DASHBOARD_URL || '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json',
-  };
+  const q = event.queryStringParameters || {};
 
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers, body: '' };
-  }
-
-  const { action, code } = JSON.parse(event.body || '{}');
-
-  // ── Step 1: Return the OAuth URL for the frontend to redirect to ──
-  if (action === 'get_auth_url') {
-    const params = new URLSearchParams({
-      client_id: process.env.GSC_CLIENT_ID,
-      redirect_uri: `${process.env.DASHBOARD_URL}/auth/callback`,
-      response_type: 'code',
-      scope: 'https://www.googleapis.com/auth/webmasters.readonly',
-      access_type: 'offline',
-      prompt: 'consent',
-    });
-
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        url: `https://accounts.google.com/o/oauth2/v2/auth?${params}`,
-      }),
-    };
-  }
-
-  // ── Step 2: Exchange auth code for tokens ──
-  if (action === 'exchange_code' && code) {
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+  if (q.code) {
+    if (q.state !== state()) return redirect('/?gsc=bad_state');
+    const res = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code,
-        client_id: process.env.GSC_CLIENT_ID,
-        client_secret: process.env.GSC_CLIENT_SECRET,
-        redirect_uri: `${process.env.DASHBOARD_URL}/auth/callback`,
-        grant_type: 'authorization_code',
-      }),
+      body: new URLSearchParams({ code: q.code, client_id: process.env.GSC_CLIENT_ID, client_secret: process.env.GSC_CLIENT_SECRET, redirect_uri: REDIRECT, grant_type: 'authorization_code' }),
     });
-
-    const tokens = await tokenRes.json();
-
-    if (tokens.error) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: tokens.error_description }),
-      };
-    }
-
-    // Store tokens in Supabase
-    const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
-    const { error } = await supabase.from('gsc_tokens').upsert({
-      id: '00000000-0000-0000-0000-000000000001', // single row
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expires_at: expiresAt.toISOString(),
-      scope: tokens.scope,
-      updated_at: new Date().toISOString(),
+    const t = await res.json();
+    if (!t.refresh_token) return redirect('/?gsc=' + encodeURIComponent(t.error_description || t.error || 'no_refresh_token'));
+    await db.from('gsc_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    await db.from('gsc_tokens').insert({
+      access_token: t.access_token, refresh_token: t.refresh_token, scope: t.scope,
+      expires_at: new Date(Date.now() + t.expires_in * 1000).toISOString(), updated_at: new Date().toISOString(),
     });
-
-    if (error) {
-      return { statusCode: 500, headers, body: JSON.stringify({ error: error.message }) };
-    }
-
-    return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
+    await trigger('gsc-sync-background', {});
+    return redirect('/?gsc=connected');
   }
 
-  // ── Step 3: Refresh access token ──
-  if (action === 'refresh_token') {
-    const { data: tokenRow } = await supabase
-      .from('gsc_tokens')
-      .select('refresh_token')
-      .single();
+  if (q.error) return redirect('/?gsc=' + encodeURIComponent(q.error));
+  if (q.key !== process.env.DASHBOARD_PASSWORD) return { statusCode: 401, body: 'Not allowed' };
 
-    if (!tokenRow?.refresh_token) {
-      return { statusCode: 401, headers, body: JSON.stringify({ error: 'No refresh token' }) };
-    }
-
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        refresh_token: tokenRow.refresh_token,
-        client_id: process.env.GSC_CLIENT_ID,
-        client_secret: process.env.GSC_CLIENT_SECRET,
-        grant_type: 'refresh_token',
-      }),
-    });
-
-    const tokens = await tokenRes.json();
-    const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
-
-    await supabase.from('gsc_tokens').update({
-      access_token: tokens.access_token,
-      expires_at: expiresAt.toISOString(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', '00000000-0000-0000-0000-000000000001');
-
-    return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
-  }
-
-  return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action' }) };
+  const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+    client_id: process.env.GSC_CLIENT_ID, redirect_uri: REDIRECT, response_type: 'code',
+    scope: 'https://www.googleapis.com/auth/webmasters.readonly', access_type: 'offline', prompt: 'consent', state: state(),
+  });
+  return redirect(url);
 };
