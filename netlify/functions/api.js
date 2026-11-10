@@ -166,6 +166,10 @@ exports.handler = async (event) => {
         const { data } = await db.from('blog_ideas').select('*').eq('id', q.id).single();
         return json(200, data);
       }
+      if (action === 'chat') {
+        const { data } = await db.from('chat_messages').select('id,role,content,status,created_at').eq('thread_id', q.thread_id).order('created_at').limit(100);
+        return json(200, { rows: data || [] });
+      }
       if (action === 'results') {
         const { data: done } = await db.from('suggestions').select('*').eq('status', 'done').order('actioned_at', { ascending: false }).limit(100);
         return json(200, { rows: done || [] });
@@ -186,6 +190,14 @@ exports.handler = async (event) => {
       if (action === 'change') {
         await db.from('changes').insert({ date: body.date || iso(new Date()), page_url: body.page_url || null, description: body.description, source: 'manual' });
         return json(200, { ok: true });
+      }
+      if (action === 'chat-send') {
+        const text = String(body.text || '').slice(0, 4000).trim();
+        if (!text || !body.thread_id) return json(400, { error: 'Empty message' });
+        await db.from('chat_messages').insert({ thread_id: body.thread_id, role: 'user', content: text });
+        const { data: reply } = await db.from('chat_messages').insert({ thread_id: body.thread_id, role: 'assistant', content: 'Thinking…', status: 'pending' }).select('id').single();
+        await trigger('chat-background', { thread_id: body.thread_id, reply_id: reply.id });
+        return json(200, { ok: true, reply_id: reply.id });
       }
       if (action === 'resolve-alert') { await db.from('alerts').update({ resolved: true }).eq('id', body.id); return json(200, { ok: true }); }
       if (action === 'delete-change') { await db.from('changes').delete().eq('id', body.id); return json(200, { ok: true }); }

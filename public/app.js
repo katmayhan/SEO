@@ -392,6 +392,57 @@
 
   document.addEventListener('click', (e) => { const b = e.target.closest('[data-go]'); if (b) go(b.dataset.go); });
 
+  // ---------- Ask Claude ----------
+  const STARTERS = ['How are we doing this week compared with last week?', 'What should I spend my 3 hours on this week?', 'Which searches could reach the top 3 with a small change?', 'Has the pram hire hub redesign helped yet?', 'Why aren\'t we mentioned by AI for travel pram questions?'];
+  let threadId = localStorage.getItem('bb_chat_thread') || newThread();
+  let polling = null;
+  function newThread() { const id = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); localStorage.setItem('bb_chat_thread', id); return id; }
+  function md(t) {
+    let h = esc(t);
+    h = h.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|\n)#{1,4} (.+)/g, '$1<h4>$2</h4>');
+    const lines = h.split('\n'); let out = '', list = null;
+    for (const l of lines) {
+      const ul = l.match(/^\s*[-•*] (.+)/), ol = l.match(/^\s*\d+[.)] (.+)/);
+      if (ul || ol) { const tag = ul ? 'ul' : 'ol'; if (list !== tag) { if (list) out += `</${list}>`; out += `<${tag}>`; list = tag; } out += `<li>${(ul || ol)[1]}</li>`; continue; }
+      if (list) { out += `</${list}>`; list = null; }
+      if (l.trim().startsWith('<h4>')) out += l; else if (l.trim()) out += `<p>${l}</p>`;
+    }
+    if (list) out += `</${list}>`;
+    return out;
+  }
+  function renderChat(rows) {
+    const box = $('#chat-msgs');
+    if (!rows.length) {
+      box.innerHTML = `<p class="small soft" style="margin:0 0 4px">Ask anything about Baboodle's search traffic, pages, rankings, AI mentions or what to do next. Try:</p><div class="chat__starters">${STARTERS.map((q) => `<button data-starter="${esc(q)}">${esc(q)}</button>`).join('')}</div>`;
+      return;
+    }
+    box.innerHTML = rows.map((m) => `<div class="msg msg--${m.role}${m.status === 'pending' ? ' msg--pending' : ''}${m.status === 'error' ? ' msg--error' : ''}">${m.role === 'assistant' && m.status === 'done' ? md(m.content) : esc(m.content)}</div>`).join('');
+    box.scrollTop = box.scrollHeight;
+  }
+  async function loadChat() {
+    const r = await api('chat', { thread_id: threadId });
+    renderChat(r.rows);
+    const pending = r.rows.some((m) => m.status === 'pending');
+    clearTimeout(polling);
+    if (pending) polling = setTimeout(loadChat, 1500);
+  }
+  async function sendChat(text) {
+    if (!text.trim()) return;
+    $('#chat-input').value = '';
+    const box = $('#chat-msgs');
+    if (box.querySelector('.chat__starters')) box.innerHTML = '';
+    box.insertAdjacentHTML('beforeend', `<div class="msg msg--user">${esc(text)}</div><div class="msg msg--assistant msg--pending">Thinking…</div>`);
+    box.scrollTop = box.scrollHeight;
+    try { await post('chat-send', { thread_id: threadId, text }); loadChat(); } catch (err) { toast(err.message); }
+  }
+  $('#chat-open').onclick = () => { $('#chat').hidden = false; $('#chat-open').hidden = true; loadChat(); $('#chat-input').focus(); };
+  $('#chat-close').onclick = () => { $('#chat').hidden = true; $('#chat-open').hidden = false; clearTimeout(polling); };
+  $('#chat-new').onclick = () => { threadId = newThread(); renderChat([]); };
+  $('#chat-form').onsubmit = (e) => { e.preventDefault(); sendChat($('#chat-input').value); };
+  $('#chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat($('#chat-input').value); } });
+  $('#chat-msgs').addEventListener('click', (e) => { const b = e.target.closest('[data-starter]'); if (b) sendChat(b.dataset.starter); });
+
   async function start() {
     $('#gate').hidden = true; $('#app').hidden = false;
     const p = new URLSearchParams(location.search);

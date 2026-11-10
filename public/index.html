@@ -32,6 +32,13 @@
   </header>
   <main class="wrap" id="view" tabindex="-1"></main>
   <div id="toast" class="toast" hidden></div>
+  <button class="chat-fab" id="chat-open" aria-label="Ask Claude about your SEO">Ask Claude</button>
+  <aside class="chat" id="chat" hidden aria-label="Ask Claude">
+    <div class="chat__head"><div><b>Ask Claude</b><div class="tiny soft">Answers from your live search data</div></div>
+      <div style="display:flex;gap:4px"><button class="btn btn--sm btn--ghost" id="chat-new">New chat</button><button class="btn btn--sm btn--ghost" id="chat-close" aria-label="Close">✕</button></div></div>
+    <div class="chat__msgs" id="chat-msgs"></div>
+    <form class="chat__form" id="chat-form"><textarea id="chat-input" rows="2" placeholder="Why did clicks drop last week?" aria-label="Your question"></textarea><button class="btn btn--coral" type="submit">Send</button></form>
+  </aside>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>

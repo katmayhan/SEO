@@ -123,3 +123,23 @@ tr:hover td{background:#fcfaf7}
 .notice--coral{background:var(--coral-bg);color:var(--coral)}
 details summary{cursor:pointer;font-weight:600}
 @media (max-width:640px){ h1{font-size:26px} .kpi .num{font-size:30px} .item{flex-direction:column} .item__actions{justify-content:flex-start} }
+
+.chat-fab{position:fixed;right:20px;bottom:20px;z-index:15;background:var(--coral);color:#fff;border:0;border-radius:30px;padding:12px 20px;font-weight:600;font-size:15px;cursor:pointer;box-shadow:0 6px 20px rgba(217,58,66,.3)}
+.chat-fab:hover{background:#c22f37}
+.chat{position:fixed;right:20px;bottom:20px;width:min(440px,calc(100vw - 24px));height:min(640px,calc(100vh - 40px));background:var(--white);border-radius:20px;box-shadow:0 12px 40px rgba(42,37,34,.18);z-index:16;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--line)}
+.chat__head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line2);background:var(--cream)}
+.chat__head b{font-family:var(--serif);font-weight:400;font-size:19px}
+.chat__msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:88%;padding:10px 13px;border-radius:16px;font-size:15px;line-height:1.5;word-wrap:break-word}
+.msg--user{align-self:flex-end;background:var(--ink);color:#fff;border-bottom-right-radius:4px}
+.msg--assistant{align-self:flex-start;background:var(--sand);border-bottom-left-radius:4px}
+.msg--assistant p{margin:0 0 8px} .msg--assistant p:last-child{margin:0}
+.msg--assistant ul,.msg--assistant ol{margin:4px 0 8px;padding-left:20px}
+.msg--assistant h4{margin:8px 0 4px;font-size:15px}
+.msg--pending{color:var(--soft);font-style:italic}
+.msg--error{background:var(--red-bg);color:var(--red)}
+.chat__starters{display:flex;flex-direction:column;gap:6px}
+.chat__starters button{text-align:left;background:var(--cream);border:1px solid var(--line2);border-radius:12px;padding:9px 12px;font-size:14px;cursor:pointer;color:var(--ink)}
+.chat__starters button:hover{border-color:var(--coral2)}
+.chat__form{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line2);align-items:flex-end}
+.chat__form textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:14px;padding:9px 12px;font:inherit;font-size:15px;max-height:140px}
