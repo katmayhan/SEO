@@ -92,12 +92,14 @@
   }
 
   // ---------- suggestion cards (shared by tabs) ----------
+  const canApply = (s) => ['images', 'meta'].includes(s.category) && !s.applied_at;
   function proposedHTML(s) {
     const p = s.proposed || {};
     const parts = [];
-    if (p.current_title || p.title) parts.push(`${p.current_title ? `<div class="was">${esc(p.current_title)}</div>` : ''}${p.title ? `<div class="now">${esc(p.title)}</div>` : ''}`);
-    if (p.current_description || p.description) parts.push(`${p.current_description ? `<div class="was">${esc(p.current_description)}</div>` : ''}${p.description ? `<div class="now">${esc(p.description)}</div>` : ''}`);
-    if (p.alt) parts.push(`<div class="now">${esc(p.alt)}</div><div class="url">${esc(p.src)}</div>`);
+    const ed = (f) => canApply(s) ? ` contenteditable="true" data-field="${f}" title="Click to edit before applying"` : '';
+    if (p.current_title || p.title) parts.push(`${p.current_title ? `<div class="was">${esc(p.current_title)}</div>` : ''}${p.title ? `<div class="now"${ed('title')}>${esc(p.title)}</div>` : ''}`);
+    if (p.current_description || p.description) parts.push(`${p.current_description ? `<div class="was">${esc(p.current_description)}</div>` : ''}${p.description ? `<div class="now"${ed('description')}>${esc(p.description)}</div>` : ''}`);
+    if (p.alt) parts.push(`<div class="now"${ed('alt')}>${esc(p.alt)}</div><div class="url">${esc(p.src)}</div>`);
     if (p.copy) parts.push(esc(p.copy));
     const rest = Object.entries(p).filter(([k]) => !['current_title', 'title', 'current_description', 'description', 'alt', 'src', 'copy'].includes(k));
     rest.forEach(([k, v]) => parts.push(`<b>${esc(k.replace(/_/g, ' '))}:</b> ${esc(typeof v === 'string' ? v : JSON.stringify(v))}`));
@@ -121,13 +123,15 @@
           <div class="item__title">${esc(s.title)}${s.effort_minutes ? ` <span class="tiny soft">· ~${esc(s.effort_minutes)} min</span>` : ''}</div>
           <div class="item__meta">${s.page_url ? `<a href="https://baboodle.co.uk${esc(s.page_url)}" target="_blank" rel="noopener">${esc(s.page_url)}</a> · ` : ''}${esc(s.detail || '')}</div>${s.strategy_score != null ? `<div style="margin-top:4px">${fit(s.strategy_score, s.strategy_note)}</div>` : ''}
           ${proposedHTML(s)}
+          ${s.apply_error && !s.applied_at ? `<div class="tiny" style="color:var(--red);margin-top:4px">Couldn't apply: ${esc(s.apply_error)}</div>` : ''}
         </div>
         <div class="item__actions">
           ${s.status !== 'suggested' ? pill(s.status) : ''}
           ${ask(`Suggestion (${s.category}, ${s.priority} priority${s.page_url ? ', page ' + s.page_url : ''}): "${s.title}". ${s.detail || ''} ${s.proposed && Object.keys(s.proposed).length ? 'Proposed: ' + JSON.stringify(s.proposed) : ''} Talk me through exactly how to do this.`)}
+          ${canApply(s) ? '<button class="btn btn--sm btn--coral" data-act="apply" title="Changes it live on baboodle.co.uk now. You can undo it.">Apply to Shopify</button>' : ''}
           ${copyText(s) ? '<button class="btn btn--sm" data-act="copy">Copy</button>' : ''}
-          ${s.status === 'suggested' ? '<button class="btn btn--sm" data-act="approved">Approve</button>' : ''}
-          <button class="btn btn--sm btn--coral" data-act="done" title="Logs it as a change so its impact is measured">Mark done</button>
+          ${s.status === 'suggested' && !canApply(s) ? '<button class="btn btn--sm" data-act="approved">Approve</button>' : ''}
+          <button class="btn btn--sm ${canApply(s) ? '' : 'btn--coral'}" data-act="done" title="${canApply(s) ? 'Use this if you changed it in Shopify yourself' : 'Logs it as a change so its impact is measured'}">Mark done</button>
           <button class="btn btn--sm btn--ghost" data-act="dismissed">Dismiss</button>
         </div>
       </div>`).join('')}</div>`;
@@ -140,6 +144,17 @@
       const s = rows.find((r) => r.id === it.dataset.sid);
       if (b.dataset.act === 'copy') { await navigator.clipboard.writeText(copyText(s)); toast('Copied'); return; }
       b.disabled = true;
+      if (b.dataset.act === 'apply' || b.dataset.act === 'undo') {
+        const edits = {};
+        it.querySelectorAll('[data-field]').forEach((el) => { const t = el.innerText.trim(); if (t && t !== (s.proposed || {})[el.dataset.field]) edits[el.dataset.field] = t; });
+        b.textContent = b.dataset.act === 'apply' ? 'Applying…' : 'Undoing…';
+        try {
+          await post(b.dataset.act === 'apply' ? 'apply' : 'undo-apply', { id: s.id, proposed: Object.keys(edits).length ? edits : undefined });
+          toast(b.dataset.act === 'apply' ? 'Live on baboodle.co.uk. Undo it under "Applied in Shopify".' : 'Undone. Shopify is back to how it was.');
+          reload();
+        } catch (err) { toast(err.message); b.disabled = false; b.textContent = b.dataset.act === 'apply' ? 'Apply to Shopify' : 'Undo'; }
+        return;
+      }
       try {
         await post('suggestion', { id: s.id, status: b.dataset.act });
         toast(b.dataset.act === 'done' ? 'Marked done and logged as a change' : b.dataset.act === 'approved' ? 'Approved' : 'Dismissed');
@@ -274,11 +289,33 @@
   };
 
   async function suggestionTab(v, cat, title, intro, extra) {
-    const [sug, done] = await Promise.all([api('suggestions', { category: cat, status: 'suggested,approved' }), extra ? extra() : null]);
-    v.innerHTML = `<div class="head"><div><h1>${esc(title)}</h1><p class="soft">${esc(intro)}</p></div></div>
+    const applies = ['images', 'meta'].includes(cat);
+    const [sug, done, st, applied] = await Promise.all([
+      api('suggestions', { category: cat, status: 'suggested,approved' }), extra ? extra() : null,
+      applies ? api('shopify-status').catch(() => ({ connected: false })) : null,
+      applies ? api('suggestions', { category: cat, status: 'done' }).catch(() => ({ rows: [] })) : null,
+    ]);
+    const appliedRows = applied ? (applied.rows || []).filter((r) => r.applied_at).slice(0, 40) : [];
+    const ready = st && st.connected && st.ok;
+    const banner = !applies ? '' : !st || !st.connected
+      ? `<div class="notice notice--coral"><span><b>Shopify isn't connected yet</b>, so "Apply to Shopify" won't work. ${esc((st && st.reason && st.reason !== 'not_configured') ? st.reason : 'Add the Shopify app credentials in Netlify.')}</span></div>`
+      : !st.ok ? `<div class="notice notice--coral"><span><b>Connected to ${esc(st.shop)}</b>, but the app is missing: ${esc(st.missing.join(', '))}. Add those permissions to the app in Shopify.</span></div>` : '';
+    const bulk = cat === 'images' && sug.rows.some(canApply)
+      ? `<button class="btn btn--coral" id="apply-all" ${ready ? '' : 'disabled'} title="Adds every alt text below to the live site. Each one can be undone.">Apply all ${sug.rows.filter(canApply).length} to Shopify</button>` : '';
+    v.innerHTML = `<div class="head"><div><h1>${esc(title)}</h1><p class="soft">${esc(intro)}</p></div>${bulk}</div>${banner}
       <div class="card" id="sl"><h3>Suggestions</h3>${suggestionList(sug.rows, 'New suggestions arrive every Monday, or press "Run weekly check now".')}</div>
+      ${appliedRows.length ? `<div class="section card" id="al"><h3>Applied in Shopify</h3><div class="list">${appliedRows.map((r) => `<div class="item" data-sid="${r.id}"><div>${pill('done', 'Live')}</div><div class="item__main"><div class="item__title">${esc(r.title)}</div><div class="item__meta">${esc(ago(r.applied_at))}${r.page_url ? ' · ' + esc(r.page_url) : ''}</div>
+        <div class="proposed">${r.applied.old && (r.applied.old.alt != null) ? `<div class="was">${esc(r.applied.old.alt || '(no alt text)')}</div><div class="now">${esc(r.applied.now.alt)}</div>` : `<div class="was">${esc((r.applied.old || {}).title || '(none)')}</div><div class="now">${esc((r.applied.now || {}).title || '')}</div>`}</div></div>
+        <div class="item__actions"><button class="btn btn--sm btn--ghost" data-act="undo">Undo</button></div></div>`).join('')}</div></div>` : ''}
       <div id="extra"></div>`;
     wireSuggestions($('#sl'), sug.rows, () => go(cat));
+    if ($('#al')) wireSuggestions($('#al'), appliedRows, () => go(cat));
+    const ab = $('#apply-all');
+    if (ab) ab.onclick = async () => {
+      if (!confirm(`Add ${sug.rows.filter(canApply).length} alt texts to the live site now? You can undo any of them afterwards.`)) return;
+      ab.disabled = true; ab.textContent = 'Applying in the background…';
+      try { await post('apply-all', { category: 'images' }); toast('Applying alt texts in Shopify. Refresh in a few minutes.'); } catch (e) { toast(e.message); ab.disabled = false; }
+    };
     return done;
   }
 
@@ -291,7 +328,7 @@
   };
 
   VIEWS.meta = async (v) => {
-    const p = await suggestionTab(v, 'meta', 'Meta titles and descriptions', 'Pages where lots of people see you in Google but few click. Copy the new wording into Shopify, then press "Mark done" so the result is measured.', () => api('pages'));
+    const p = await suggestionTab(v, 'meta', 'Meta titles and descriptions', 'Pages where lots of people see you in Google but few click. Click the new wording to tweak it, then Apply to Shopify: it goes live straight away, is logged so the result is measured, and can be undone.', () => api('pages'));
     const rows = (p.pages || []).filter((x) => x.status === 200 && (x.issues || []).some((i) => /title|meta/.test(i.code)));
     $('#extra').innerHTML = `<div class="section card"><h3>Title and description issues (${rows.length})</h3><div class="tablewrap"><table><thead><tr><th>Page</th><th>Title</th><th>Issues</th><th></th></tr></thead><tbody>
       ${rows.slice(0, 200).map((x) => `<tr><td class="url">${esc(x.url)}</td><td>${esc(x.title || '—')}<div class="url">${esc(x.meta_description || 'no description')}</div></td><td>${(x.issues || []).filter((i) => /title|meta/.test(i.code)).map((i) => esc(i.text)).join('<br>')}</td><td>${ask(`Page ${x.url}: Google title "${x.title || 'none'}", description "${x.meta_description || 'none'}". Issues: ${(x.issues || []).filter((i) => /title|meta/.test(i.code)).map((i) => i.text).join('; ')}. Write me a better title and description.`)}</td></tr>`).join('') || '<tr><td colspan="3" class="soft">No issues found.</td></tr>'}</tbody></table></div></div>`;
@@ -308,7 +345,7 @@
   };
 
   VIEWS.images = async (v) => {
-    const p = await suggestionTab(v, 'images', 'Images and alt text', 'Alt text helps Google Images and screen readers. Claude writes it from the product and the image file; copy it into Shopify, then mark it done.', () => api('pages'));
+    const p = await suggestionTab(v, 'images', 'Images and alt text', 'Alt text helps Google Images and screen readers. Claude writes it from the product and the image file. Click any text to edit it, then Apply to Shopify (one at a time or all at once). Every change can be undone.', () => api('pages'));
     $('#extra').innerHTML = `<div class="section grid g4"><div class="card kpi"><div class="label">Images checked</div><div class="num">${n0(p.images)}</div></div><div class="card kpi">${ask(`${p.images_no_alt} of ${p.images} images on baboodle.co.uk have no alt text, across ${(p.pages || []).filter((x) => x.img_missing_alt).length} pages.`)}<div class="label">Missing alt text</div><div class="num">${n0(p.images_no_alt)}</div></div><div class="card kpi"><div class="label">Pages affected</div><div class="num">${n0((p.pages || []).filter((x) => x.img_missing_alt).length)}</div></div></div>`;
   };
 

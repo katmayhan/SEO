@@ -149,3 +149,6 @@ details summary{cursor:pointer;font-weight:600}
 .kpi,.card--lav{position:relative}
 .kpi > .ask,.card--lav > .ask{position:absolute;top:12px;right:12px}
 .notice .ask{background:rgba(255,255,255,.6)}
+.proposed [contenteditable="true"]{cursor:text;border-radius:6px;padding:1px 4px;margin:0 -4px;outline:1px dashed transparent}
+.proposed [contenteditable="true"]:hover{outline-color:var(--coral2)}
+.proposed [contenteditable="true"]:focus{outline:2px solid var(--coral);background:#fff}

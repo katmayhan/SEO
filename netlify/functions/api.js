@@ -1,5 +1,6 @@
 // Dashboard data API. Every call needs the dashboard password in the x-dash-key header.
 const { db, json, trigger } = require('../../lib/shared');
+const shop = require('../../lib/shopify');
 
 const iso = (d) => new Date(d).toISOString().slice(0, 10);
 const addDays = (d, n) => iso(new Date(new Date(d).getTime() + n * 864e5));
@@ -118,21 +119,21 @@ async function aeoSummary() {
 }
 
 async function sendToShopify(id) {
-  const store = process.env.SHOPIFY_STORE, token = process.env.SHOPIFY_ADMIN_TOKEN, blogId = process.env.SHOPIFY_BLOG_ID;
-  if (!store || !token || !blogId) throw new Error('Shopify isn\'t connected yet: add SHOPIFY_STORE, SHOPIFY_ADMIN_TOKEN and SHOPIFY_BLOG_ID in Netlify');
+  let blogId = process.env.SHOPIFY_BLOG_ID;
+  if (!blogId) {
+    const d = await shop.gql('{ blogs(first: 10) { nodes { id handle title } } }');
+    const blogs = (d.blogs && d.blogs.nodes) || [];
+    const pick = blogs.find((b) => /blog|journal|news/i.test(b.handle)) || blogs[0];
+    if (!pick) throw new Error('No blog found in Shopify. Create one under Online Store → Blog posts.');
+    blogId = pick.id;
+  }
   const { data: b } = await db.from('blog_ideas').select('*').eq('id', id).single();
-  const res = await fetch(`https://${store}/admin/api/${process.env.SHOPIFY_API_VERSION || '2025-10'}/graphql.json`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
-    body: JSON.stringify({
-      query: `mutation($a: ArticleCreateInput!){ articleCreate(article:$a){ article{ id handle } userErrors{ field message } } }`,
-      variables: { a: { blogId, title: b.title, body: b.draft_html, isPublished: false, author: { name: 'Baboodle' },
-        metafields: [{ namespace: 'global', key: 'title_tag', type: 'single_line_text_field', value: b.meta_title || b.title }, { namespace: 'global', key: 'description_tag', type: 'multi_line_text_field', value: b.meta_description || '' }] } },
-    }),
+  const d = await shop.gql(`mutation($a: ArticleCreateInput!){ articleCreate(article:$a){ article{ id handle } userErrors{ field message } } }`, {
+    a: { blogId, title: b.title, body: b.draft_html, isPublished: false, author: { name: 'Baboodle' },
+      metafields: [{ namespace: 'global', key: 'title_tag', type: 'single_line_text_field', value: b.meta_title || b.title }, { namespace: 'global', key: 'description_tag', type: 'multi_line_text_field', value: b.meta_description || '' }] },
   });
-  const d = await res.json();
-  const r = d.data && d.data.articleCreate;
-  if (!r || (r.userErrors && r.userErrors.length)) throw new Error('Shopify: ' + JSON.stringify((r && r.userErrors) || d.errors || d));
+  const r = d.articleCreate;
+  if (!r || (r.userErrors && r.userErrors.length)) throw new Error('Shopify: ' + JSON.stringify((r && r.userErrors) || d));
   await db.from('blog_ideas').update({ status: 'in_shopify', shopify_article_id: r.article.id, updated_at: new Date().toISOString() }).eq('id', id);
   return r.article;
 }
@@ -148,6 +149,7 @@ exports.handler = async (event) => {
   try {
     if (event.httpMethod === 'GET') {
       if (action === 'overview') return json(200, await overview());
+      if (action === 'shopify-status') return json(200, await shop.status());
       if (action === 'keywords') return json(200, await keywords());
       if (action === 'pages') return json(200, await pagesData());
       if (action === 'aeo') return json(200, await aeoSummary());
@@ -230,6 +232,36 @@ exports.handler = async (event) => {
         ['meta_title', 'meta_description', 'draft_html', 'status', 'title'].forEach((k) => { if (body[k] !== undefined) patch[k] = body[k]; });
         patch.updated_at = new Date().toISOString();
         await db.from('blog_ideas').update(patch).eq('id', body.id);
+        return json(200, { ok: true });
+      }
+      if (action === 'apply') {
+        const { data: s } = await db.from('suggestions').select('*').eq('id', body.id).single();
+        if (!s) return json(404, { error: 'Suggestion not found' });
+        if (s.applied_at) return json(409, { error: 'Already applied' });
+        if (body.proposed) { s.proposed = { ...(s.proposed || {}), ...body.proposed }; await db.from('suggestions').update({ proposed: s.proposed }).eq('id', s.id); }
+        try {
+          const applied = await shop.applySuggestion(s);
+          await db.from('suggestions').update({ status: 'done', actioned_at: new Date().toISOString(), applied, applied_at: new Date().toISOString(), apply_error: null }).eq('id', s.id);
+          if (s.category !== 'images') await db.from('changes').insert({ date: iso(new Date()), page_url: s.page_url, description: 'Applied in Shopify: ' + s.title, source: 'shopify', suggestion_id: s.id });
+          return json(200, { ok: true, applied });
+        } catch (e) {
+          await db.from('suggestions').update({ apply_error: e.message.slice(0, 300) }).eq('id', s.id);
+          return json(400, { error: e.message });
+        }
+      }
+      if (action === 'undo-apply') {
+        const { data: s } = await db.from('suggestions').select('*').eq('id', body.id).single();
+        if (!s || !s.applied) return json(400, { error: 'Nothing to undo' });
+        await shop.undo(s.applied);
+        await db.from('suggestions').update({ status: 'suggested', actioned_at: null, applied: null, applied_at: null }).eq('id', s.id);
+        await db.from('changes').delete().eq('suggestion_id', s.id).eq('source', 'shopify');
+        return json(200, { ok: true });
+      }
+      if (action === 'apply-all') {
+        if (!shop.configured()) return json(400, { error: 'Shopify isn\'t connected yet' });
+        const { data: busy } = await db.from('runs').select('id').eq('job', 'apply-shopify').eq('status', 'running').gte('started_at', new Date(Date.now() - 15 * 60000).toISOString()).limit(1);
+        if (busy && busy.length) return json(409, { error: 'Already applying, give it a few minutes.' });
+        await trigger('apply-shopify-background', { category: body.category || 'images', ids: body.ids || null });
         return json(200, { ok: true });
       }
       if (action === 'send-blog') return json(200, { ok: true, article: await sendToShopify(body.id) });
