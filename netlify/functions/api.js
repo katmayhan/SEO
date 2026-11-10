@@ -87,7 +87,16 @@ async function keywords() {
   const last = await latestDate();
   if (!last) return { rows: [] };
   const { data } = await db.rpc('kw_window', { d_from: addDays(last, -27), d_to: last, lim: 400 });
-  return { from: addDays(last, -27), to: last, rows: (data || []).map((r) => ({ ...r, clicks: Number(r.clicks), impressions: Number(r.impressions), ctr: Number(r.ctr), pos: Number(r.pos) })) };
+  const rows = (data || []).map((r) => ({ ...r, clicks: Number(r.clicks), impressions: Number(r.impressions), ctr: Number(r.ctr), pos: Number(r.pos) }));
+  const clean = (k) => String(k || '').toLowerCase().replace(/[^a-z0-9£&' -]/g, ' ').replace(/\s+/g, ' ').trim();
+  const { data: vols } = await db.from('keyword_volumes').select('keyword,search_volume,cpc,competition,monthly,source').order('search_volume', { ascending: false, nullsFirst: false }).limit(3000);
+  const vm = Object.fromEntries((vols || []).map((v) => [v.keyword, v]));
+  rows.forEach((r) => { const v = vm[clean(r.query)]; if (v) { r.volume = v.search_volume; r.cpc = v.cpc; } });
+  // demand Baboodle isn't capturing: searches with real volume where it isn't on page 1 (or doesn't show)
+  const best = {};
+  rows.forEach((r) => { const k = clean(r.query); if (!best[k] || r.impressions > best[k].impressions) best[k] = r; });
+  const gaps = (vols || []).filter((v) => (v.search_volume || 0) >= 30).map((v) => ({ keyword: v.keyword, volume: v.search_volume, cpc: v.cpc, competition: v.competition, monthly: v.monthly, pos: best[v.keyword] ? best[v.keyword].pos : null, page: best[v.keyword] ? best[v.keyword].page : null })).filter((g) => g.pos == null || g.pos > 10).slice(0, 300);
+  return { from: addDays(last, -27), to: last, rows, gaps, volumes_connected: !!(process.env.DATAFORSEO_LOGIN && process.env.DATAFORSEO_PASSWORD), volumes_count: (vols || []).length };
 }
 
 async function pagesData() {

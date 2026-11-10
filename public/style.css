@@ -152,3 +152,5 @@ details summary{cursor:pointer;font-weight:600}
 .proposed [contenteditable="true"]{cursor:text;border-radius:6px;padding:1px 4px;margin:0 -4px;outline:1px dashed transparent}
 .proposed [contenteditable="true"]:hover{outline-color:var(--coral2)}
 .proposed [contenteditable="true"]:focus{outline:2px solid var(--coral);background:#fff}
+.spark{display:inline-flex;align-items:flex-end;gap:2px;height:16px;vertical-align:middle}
+.spark i{display:block;width:4px;background:var(--coral);border-radius:1px;opacity:.75}

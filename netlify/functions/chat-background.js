@@ -14,6 +14,7 @@ const wpos = (a) => { const i = sum(a, 'impressions'); return i ? +(a.reduce((s,
 const TOOLS = [
   { name: 'site_totals', description: 'Whole-site Google Search totals (clicks, impressions, CTR, average position) for two periods, plus daily figures. Use for "how are we doing", trends and drops.', input_schema: { type: 'object', properties: { days: { type: 'integer', description: 'Length of each period in days (default 7)' } } } },
   { name: 'search_keywords', description: 'Search queries from Google Search Console for a period: clicks, impressions, CTR, average position and the page Google shows. Optionally filter by text.', input_schema: { type: 'object', properties: { contains: { type: 'string' }, days: { type: 'integer', description: 'default 28' }, limit: { type: 'integer', description: 'default 40' }, min_position: { type: 'number' }, max_position: { type: 'number' } } } },
+  { name: 'search_volumes', description: 'Real UK Google monthly search volumes from Keyword Planner (Google Ads data), with CPC, competition and the last 12 months. Covers searches Baboodle shows for plus keyword ideas around the strategy priorities, including ones Baboodle does not rank for. Filter by text.', input_schema: { type: 'object', properties: { contains: { type: 'string' }, limit: { type: 'integer', description: 'default 40' } } } },
   { name: 'query_trend', description: 'Daily clicks, impressions and position for one exact search query.', input_schema: { type: 'object', properties: { query: { type: 'string' }, days: { type: 'integer', description: 'default 56' } }, required: ['query'] } },
   { name: 'page_performance', description: 'Search performance for one page path (e.g. /collections/pram-hire): totals for this period vs the previous one, and its top queries.', input_schema: { type: 'object', properties: { path: { type: 'string' }, days: { type: 'integer', description: 'default 28' } }, required: ['path'] } },
   { name: 'top_pages', description: 'Pages ranked by clicks for a period, with the previous period for comparison.', input_schema: { type: 'object', properties: { days: { type: 'integer', description: 'default 28' }, limit: { type: 'integer' } } } },
@@ -35,6 +36,13 @@ async function runTool(name, input = {}) {
       const now = data.filter((r) => r.date > addDays(last, -d)), prev = data.filter((r) => r.date <= addDays(last, -d));
       const t = (a) => ({ from: a[0] && a[0].date, to: a[a.length - 1] && a[a.length - 1].date, clicks: sum(a, 'clicks'), impressions: sum(a, 'impressions'), ctr: +(sum(a, 'clicks') / Math.max(1, sum(a, 'impressions'))).toFixed(4), position: wpos(a) });
       return { latest_date: last, current: t(now), previous: t(prev), daily: data.map((r) => ({ date: r.date, clicks: r.clicks, impressions: r.impressions, position: +Number(r.position).toFixed(1) })) };
+    }
+    case 'search_volumes': {
+      let qb = db.from('keyword_volumes').select('keyword,search_volume,cpc,competition,monthly,source').order('search_volume', { ascending: false, nullsFirst: false }).limit(Math.min(input.limit || 40, 150));
+      if (input.contains) qb = qb.ilike('keyword', `%${input.contains.toLowerCase()}%`);
+      const { data } = await qb;
+      if (!data || !data.length) return { note: 'No Keyword Planner data yet (DataForSEO not connected, or nothing matches).' };
+      return data.map((r) => ({ search: r.keyword, monthly_searches: r.search_volume, cpc_gbp_approx: r.cpc, competition: r.competition, last_12_months: (r.monthly || []).map((m) => m.v) }));
     }
     case 'search_keywords': {
       const d = input.days || 28;

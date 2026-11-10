@@ -1,5 +1,6 @@
 // Weekly analysis: turns Search Console + site scan + AI checks into suggestions per tab,
 // blog ideas with a full strategy, alt-text proposals, and measures changes made 28+ days ago.
+const vol = require('../../lib/volumes');
 const { db, json, isJobCall, startRun, endRun, claude, claudeJSON, claudeText, parseJSON, MODEL_MAIN, MODEL_FAST, BRAND_BRIEF: BASE_BRIEF, strategyBrief } = require('../../lib/shared');
 let BRAND_BRIEF = BASE_BRIEF;
 
@@ -135,6 +136,17 @@ exports.handler = async (event) => {
     const { data: kw, error: kwErr } = await db.rpc('kw_window', { d_from: dFrom, d_to: dTo, lim: 1500 });
     if (kwErr) throw new Error(kwErr.message);
     const queries = (kw || []).map((r) => ({ query: r.query, page: r.page, clicks: Number(r.clicks), impressions: Number(r.impressions), ctr: Number(r.ctr), position: Number(r.pos) }));
+    // Keyword Planner volumes (DataForSEO): refresh, then attach real monthly searches
+    let volNote = '', gapList = [], volErr = null;
+    try {
+      const vr = await vol.refresh(queries.map((x) => x.query), BRAND_BRIEF);
+      if (!vr.skipped) {
+        const vm = await vol.lookup(queries.slice(0, 400).map((x) => x.query));
+        queries.forEach((x) => { const v = vm[vol.clean(x.query)]; if (v) x.monthly_searches = v.search_volume; });
+        gapList = (await vol.gaps(queries, 80)).map((g) => ({ search: g.keyword, monthly_searches: g.search_volume, your_position: g.position, cpc: g.cpc }));
+        volNote = ' monthly_searches = real UK Google monthly searches from Keyword Planner. Use it as the main demand signal; impressions only count searches where Baboodle already shows.';
+      }
+    } catch (e) { volErr = 'keyword volumes: ' + e.message; }
     const topQueries = queries.slice(0, 180);
     const { data: pw } = await db.rpc('page_window', { d_from: dFrom, d_to: dTo });
     const topPages = (pw || []).map((r) => ({ page: r.page, clicks: Number(r.clicks), impressions: Number(r.impressions), ctr: Number(r.ctr), position: Number(r.pos) })).sort((a, b) => b.impressions - a.impressions).slice(0, 50);
@@ -156,15 +168,15 @@ exports.handler = async (event) => {
     const { data: oldBlogs } = await db.from('blog_ideas').select('title,status');
     const { data: changes } = await db.from('changes').select('date,page_url,description').order('date', { ascending: false }).limit(20);
 
-    const dataPack = JSON.stringify({ top_queries_28d: topQueries, top_pages_28d: topPages, site_scan: scanBrief, ai_answer_checks: aeo, recent_changes: changes, open_suggestions: openS, existing_blog_ideas: oldBlogs });
+    const dataPack = JSON.stringify({ top_queries_28d: topQueries, demand_where_baboodle_is_not_on_page_1: gapList, top_pages_28d: topPages, site_scan: scanBrief, ai_answer_checks: aeo, recent_changes: changes, open_suggestions: openS, existing_blog_ideas: oldBlogs });
 
-    const errors = [];
+    const errors = volErr ? [volErr] : [];
     let sugs = [], blogs = [], alts = 0;
     // 1) Suggestions for each tab
     try {
     const sOut = await claudeJSON({
       model: MODEL_MAIN, max_tokens: 16000, schema: SUG_SCHEMA,
-      system: BRAND_BRIEF + '\nYou are Baboodle\'s SEO and AEO strategist. Be specific: name the page, the search, the number. Prioritise by how much it moves Baboodle\'s strategy (long-term customers and the priority categories) and likely extra bookings. Do not repeat open suggestions or suggest undoing recent changes. Note: Search Console has no search-volume data, impressions are your demand signal.',
+      system: BRAND_BRIEF + '\nYou are Baboodle\'s SEO and AEO strategist. Be specific: name the page, the search, the number. Prioritise by how much it moves Baboodle\'s strategy (long-term customers and the priority categories) and likely extra bookings. Do not repeat open suggestions or suggest undoing recent changes. ' + (volNote ? 'Note:' + volNote + ' Use demand_where_baboodle_is_not_on_page_1 to spot on-strategy searches with real demand that Baboodle is missing, and say which page should win each.' : 'Note: Search Console has no search-volume data, impressions are your demand signal.'),
       messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 10–15 new suggestions (keep each detail under 60 words and copy under 120 words) across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect, and which part of the strategy it serves","page_url":"/path or null","priority":"high|medium|low","effort_minutes":15,"strategy_score":4,"strategy_note":"priority it serves","proposed":{}}]}  (effort_minutes = realistic time for Katie to do it herself in Shopify, 5–90). ${SCORE_GUIDE} At least two thirds of suggestions should score 4–5. Do not suggest anything that would score 0.` }],
     });
     sugs = (sOut.suggestions || []).filter((s) => s.title && s.category);
@@ -178,15 +190,18 @@ exports.handler = async (event) => {
       model: MODEL_MAIN, max_tokens: 16000,
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 6, user_location: { type: 'approximate', country: 'GB' } }],
       system: BRAND_BRIEF + '\nYou plan Baboodle\'s blog. Each post must win real searches parents make and lead readers to a hire page.',
-      messages: [{ role: 'user', content: `Search Console queries (last 28 days, with Baboodle's current position and page):\n${JSON.stringify(topQueries)}\nAI answer checks:\n${JSON.stringify(aeo)}\nExisting ideas (do not repeat): ${JSON.stringify(oldBlogs)}\n\nPropose the 4 best NEW blog posts for Baboodle's strategy. Start from the strategy's priorities and "content we want", then use the search data to pick the angle and the searches to target. Among on-strategy ideas, prefer clusters with lots of impressions where Baboodle ranks below 8 or has no page that answers the search. Never propose posts about products or topics the strategy says not to push. ${SCORE_GUIDE} Only propose posts scoring 4–5 (at most one scoring 3). Use web search to see what currently ranks in Google UK for the main search of each.\nReply as JSON: {"blogs":[{"title":"","target_page":"/collections/...","intent":"who is searching and why, 1-2 sentences","cluster":["exact queries from the list above that this post targets"],"extra_searches":["closely related searches people make, even if not in the list"],"questions":["People also ask style questions to answer"],"outline":["H2 sections in order"],"products":["products to feature"],"angle":"what makes it better than what ranks now","ranking":{"main_search":"","target_position":5,"timeframe":"3 months","difficulty":"low|medium|high","currently_ranking":[{"name":"","url":"","note":""}],"bonus":"snippet / People also ask / AI answers"},"conversion_path":"how readers get to a hire page and book","strategy_score":5,"strategy_note":"priority it serves"}]}` }],
+      messages: [{ role: 'user', content: `Search Console queries (last 28 days, with Baboodle's current position and page):\n${JSON.stringify(topQueries)}${gapList.length ? `\nSearches with real UK demand (Keyword Planner monthly searches) where Baboodle is not on page 1 or doesn't show at all:\n${JSON.stringify(gapList)}\n${volNote}` : ''}\nAI answer checks:\n${JSON.stringify(aeo)}\nExisting ideas (do not repeat): ${JSON.stringify(oldBlogs)}\n\nPropose the 4 best NEW blog posts for Baboodle's strategy. Start from the strategy's priorities and "content we want", then use the search data to pick the angle and the searches to target. Among on-strategy ideas, prefer clusters with the most real demand (monthly searches where known, otherwise impressions) where Baboodle ranks below 8 or has no page that answers the search. Never propose posts about products or topics the strategy says not to push. ${SCORE_GUIDE} Only propose posts scoring 4–5 (at most one scoring 3). Use web search to see what currently ranks in Google UK for the main search of each.\nReply as JSON: {"blogs":[{"title":"","target_page":"/collections/...","intent":"who is searching and why, 1-2 sentences","cluster":["exact searches from either list above that this post targets"],"extra_searches":["closely related searches people make, even if not in the list"],"questions":["People also ask style questions to answer"],"outline":["H2 sections in order"],"products":["products to feature"],"angle":"what makes it better than what ranks now","ranking":{"main_search":"","target_position":5,"timeframe":"3 months","difficulty":"low|medium|high","currently_ranking":[{"name":"","url":"","note":""}],"bonus":"snippet / People also ask / AI answers"},"conversion_path":"how readers get to a hire page and book","strategy_score":5,"strategy_note":"priority it serves"}]}` }],
     });
     blogs = parseJSON(claudeText(bResp)).blogs || [];
     for (const b of blogs) {
+      const vmap = await vol.lookup((b.cluster || []).map(String)).catch(() => ({}));
       const cluster = (b.cluster || []).map((q) => {
         const g = queries.find((x) => x.query.toLowerCase() === String(q).toLowerCase());
-        return { query: q, impressions_28d: g ? g.impressions : 0, position: g ? g.position : null, clicks_28d: g ? g.clicks : 0 };
+        const v = vmap[vol.clean(q)];
+        return { query: q, impressions_28d: g ? g.impressions : 0, position: g ? g.position : null, clicks_28d: g ? g.clicks : 0, monthly_searches: v ? v.search_volume : null };
       });
-      const demand = Math.round(cluster.reduce((x, c) => x + c.impressions_28d, 0) * 30 / 28);
+      // real monthly searches where Keyword Planner knows them, otherwise Search Console impressions scaled to a month
+      const demand = Math.round(cluster.reduce((x, c) => x + (c.monthly_searches != null ? c.monthly_searches : c.impressions_28d * 30 / 28), 0));
       const target = (b.ranking && b.ranking.target_position) || 5;
       const clicks = Math.round(demand * ctrAt(target));
       const toHire = Math.round(clicks * 0.25);
