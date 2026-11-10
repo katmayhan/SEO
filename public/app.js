@@ -286,7 +286,7 @@
   VIEWS.technical = async (v) => {
     const p = await suggestionTab(v, 'technical', 'Technical', 'From the weekly crawl of the live site: broken or redirected pages in the sitemap, missing headings, noindex, canonicals, duplicates, thin pages and orphan pages.', () => api('pages'));
     const groups = {};
-    (p.pages || []).forEach((x) => (x.issues || []).forEach((i) => { if (['alt'].includes(i.code)) return; (groups[i.code] = groups[i.code] || { sev: i.sev, text: i.text.replace(/\d+/g, 'N'), urls: [] }).urls.push({ url: x.url, text: i.text }); }));
+    (p.pages || []).forEach((x) => (x.issues || []).forEach((i) => { if (['alt'].includes(i.code)) return; (groups[i.code] = groups[i.code] || { sev: i.sev, text: i.text.replace(/\b\d+\b/g, 'N').replace(/: N words/, '').replace(/^N /, 'Some '), urls: [] }).urls.push({ url: x.url, text: i.text }); }));
     const order = { high: 0, medium: 1, low: 2 };
     const list = Object.values(groups).sort((a, b) => order[a.sev] - order[b.sev] || b.urls.length - a.urls.length);
     $('#extra').innerHTML = `<div class="section card"><h3>Crawl findings · ${n0((p.pages || []).length)} pages scanned</h3><div class="list">

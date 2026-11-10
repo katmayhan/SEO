@@ -28,7 +28,7 @@ async function sitemapUrls() {
   for (const s of subs) {
     if (/sitemap_.*\.xml/.test(s) || s.endsWith('.xml') || s.includes('sitemap')) {
       const sm = await get(s);
-      urls.push(...[...sm.text.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1].replace(/&amp;/g, '&')).filter((u) => !/\.(jpg|png|webp|gif)/i.test(u)));
+      urls.push(...[...sm.text.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1].replace(/&amp;/g, '&')).filter((u) => !/\.(jpg|png|webp|gif|md|txt|xml|json)$/i.test(u.split('?')[0])));
     } else urls.push(s);
   }
   const order = (u) => (/\/collections\//.test(u) ? 0 : /\/pages\//.test(u) ? 1 : /\/blogs\//.test(u) ? 2 : /\/products\//.test(u) ? 3 : 4);
