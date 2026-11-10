@@ -62,6 +62,9 @@ async function altText() {
 
 exports.handler = async (event) => {
   if (!isJobCall(event)) return json(401, { error: 'Not allowed' });
+  // don't run two analyses at once (avoids duplicate suggestions)
+  const { data: busy } = await db.from('runs').select('id').eq('job', 'analyze').eq('status', 'running').gte('started_at', new Date(Date.now() - 20 * 60000).toISOString()).limit(1);
+  if (busy && busy.length) return json(200, { skipped: 'already running' });
   const run = await startRun('analyze');
   try {
     const measured = await measure();

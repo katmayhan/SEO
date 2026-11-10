@@ -69,14 +69,15 @@
     const r = o.runs || {};
     const sync = r['gsc-sync'], scan = r['site-scan'], an = r['analyze'];
     const bit = (name, run) => `<span title="${esc(run ? run.message : '')}">${name}: ${run ? (run.status === 'error' ? '<b class="down">failed</b>' : run.status === 'running' ? 'running…' : ago(run.finished_at)) : 'not run yet'}</span>`;
-    $('#status').innerHTML = `${bit('Search Console', sync)} · ${bit('Site scan', scan)} · ${bit('Analysis', an)}
-      <button class="btn btn--sm" data-run="weekly" title="Scan the site, check AI answers and write new suggestions">Run weekly check now</button>`;
+    const weeklyBusy = ['site-scan', 'aeo-check', 'analyze'].some((j) => r[j] && r[j].status === 'running' && Date.now() - new Date(r[j].started_at) < 25 * 60000);
+    $('#status').innerHTML = `${bit('Search Console', sync)} · ${bit('Site scan', scan)} · ${bit('AI check', r['aeo-check'])} · ${bit('Analysis', an)}
+      ${weeklyBusy ? '<span class="pill p-drafting">Weekly check running…</span>' : '<button class="btn btn--sm" data-run="weekly" title="Scan the site, check AI answers and write new suggestions (takes about 10 minutes)">Run weekly check now</button>'}`;
   }
   document.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-run]');
     if (!b) return;
     b.disabled = true;
-    try { await post('run', { job: b.dataset.run }); toast('Started. It runs in the background; refresh in a few minutes.'); } catch (err) { toast(err.message); }
+    try { await post('run', { job: b.dataset.run }); toast('Started. It takes about 10 minutes and runs in the background.'); b.outerHTML = '<span class="pill p-drafting">Weekly check running…</span>'; } catch (err) { toast(err.message); }
     setTimeout(() => (b.disabled = false), 4000);
   });
 

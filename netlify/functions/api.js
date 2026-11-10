@@ -205,6 +205,9 @@ exports.handler = async (event) => {
         const jobs = { sync: ['gsc-sync-background', {}], backfill: ['gsc-sync-background', { days: 90 }], scan: ['site-scan-background', {}], aeo: ['aeo-check-background', {}], analyze: ['analyze-background', {}], weekly: ['site-scan-background', { chain: true }] };
         const j = jobs[body.job];
         if (!j) return json(400, { error: 'Unknown job' });
+        const busyJobs = body.job === 'weekly' ? ['site-scan', 'aeo-check', 'analyze'] : [j[0].replace('-background', '')];
+        const { data: busy } = await db.from('runs').select('job').in('job', busyJobs).eq('status', 'running').gte('started_at', new Date(Date.now() - 25 * 60000).toISOString()).limit(1);
+        if (busy && busy.length) return json(409, { error: 'That\'s already running. Give it a few minutes.' });
         await trigger(j[0], j[1]);
         return json(200, { ok: true });
       }
