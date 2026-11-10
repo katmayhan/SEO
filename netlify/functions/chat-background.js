@@ -137,7 +137,7 @@ When Katie asks "what should I do about this" for an item from the dashboard, fi
 End with one line: "Say **save it** and I'll add this to your suggestions." If she says save it, call save_action with the action (put paste-ready copy in proposed). British English, plain words, no SEO jargon without a short explanation. Use **bold** and simple lists; no tables wider than 4 columns.`;
 
     let answer = '';
-    for (let turn = 0; turn < 8; turn++) {
+    for (let turn = 0; turn < 12; turn++) {
       const resp = await claude({
         model: MODEL_MAIN, max_tokens: 2500, system, messages,
         tools: [...TOOLS, { type: 'web_search_20250305', name: 'web_search', max_uses: 3, user_location: { type: 'approximate', country: 'GB' } }],
@@ -154,6 +154,13 @@ End with one line: "Say **save it** and I'll add this to your suggestions." If s
       }
       messages.push({ role: 'user', content: results });
       await db.from('chat_messages').update({ content: 'Looking at the data…' }).eq('id', reply_id);
+    }
+    if (!answer.trim()) {
+      // ran out of research steps: answer with what has been gathered so far
+      if (messages[messages.length - 1].role === 'assistant') messages.push({ role: 'user', content: 'Please answer now with what you have found so far.' });
+      else messages[messages.length - 1].content.push({ type: 'text', text: 'Please answer now with what you have found so far.' });
+      const fin = await claude({ model: MODEL_MAIN, max_tokens: 2500, system, messages: messages.map((m) => ({ role: m.role, content: Array.isArray(m.content) ? m.content.filter((b) => !['server_tool_use', 'web_search_tool_result'].includes(b.type)) : m.content })), tools: TOOLS });
+      answer = (fin.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
     }
     await db.from('chat_messages').update({ content: answer || 'Sorry, I couldn\'t find an answer to that.', status: 'done' }).eq('id', reply_id);
     return json(200, { ok: true });

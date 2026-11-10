@@ -95,23 +95,29 @@ exports.handler = async (event) => {
 
     const dataPack = JSON.stringify({ top_queries_28d: topQueries, top_pages_28d: topPages, site_scan: scanBrief, ai_answer_checks: aeo, recent_changes: changes, open_suggestions: openS, existing_blog_ideas: oldBlogs });
 
+    const errors = [];
+    let sugs = [], blogs = [], alts = 0;
     // 1) Suggestions for each tab
+    try {
     const sResp = await claude({
-      model: MODEL_MAIN, max_tokens: 8000,
+      model: MODEL_MAIN, max_tokens: 16000,
       system: BRAND_BRIEF + '\nYou are Baboodle\'s SEO and AEO strategist. Be specific: name the page, the search, the number. Prioritise by likely extra bookings. Do not repeat open suggestions or suggest undoing recent changes. Note: Search Console has no search-volume data, impressions are your demand signal.',
-      messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 12–20 new suggestions across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect","page_url":"/path or null","priority":"high|medium|low","effort_minutes":15,"proposed":{}}]}  (effort_minutes = realistic time for Katie to do it herself in Shopify, 5–90)` }],
+      messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 10–15 new suggestions (keep each detail under 60 words and copy under 120 words) across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect","page_url":"/path or null","priority":"high|medium|low","effort_minutes":15,"proposed":{}}]}  (effort_minutes = realistic time for Katie to do it herself in Shopify, 5–90)` }],
     });
-    const sugs = (parseJSON(claudeText(sResp)).suggestions || []).filter((s) => s.title && s.category);
+    sugs = (parseJSON(claudeText(sResp)).suggestions || []).filter((s) => s.title && s.category);
     if (sugs.length) await db.from('suggestions').insert(sugs.map((s) => ({ category: s.category, title: s.title, detail: s.detail, page_url: s.page_url || null, priority: s.priority || 'medium', effort_minutes: s.effort_minutes || null, proposed: s.proposed || {} })));
 
+    } catch (e) { errors.push('suggestions: ' + e.message); }
+
     // 2) Blog ideas with strategy (live web search to see who ranks now)
+    try {
     const bResp = await claude({
-      model: MODEL_MAIN, max_tokens: 8000,
+      model: MODEL_MAIN, max_tokens: 16000,
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 6, user_location: { type: 'approximate', country: 'GB' } }],
       system: BRAND_BRIEF + '\nYou plan Baboodle\'s blog. Each post must win real searches parents make and lead readers to a hire page.',
       messages: [{ role: 'user', content: `Search Console queries (last 28 days, with Baboodle's current position and page):\n${JSON.stringify(topQueries)}\nAI answer checks:\n${JSON.stringify(aeo)}\nExisting ideas (do not repeat): ${JSON.stringify(oldBlogs)}\n\nPropose the 4 best NEW blog posts. Prefer clusters with lots of impressions where Baboodle ranks below 8 or has no page that answers the search. Use web search to see what currently ranks in Google UK for the main search of each.\nReply as JSON: {"blogs":[{"title":"","target_page":"/collections/...","intent":"who is searching and why, 1-2 sentences","cluster":["exact queries from the list above that this post targets"],"extra_searches":["closely related searches people make, even if not in the list"],"questions":["People also ask style questions to answer"],"outline":["H2 sections in order"],"products":["products to feature"],"angle":"what makes it better than what ranks now","ranking":{"main_search":"","target_position":5,"timeframe":"3 months","difficulty":"low|medium|high","currently_ranking":[{"name":"","url":"","note":""}],"bonus":"snippet / People also ask / AI answers"},"conversion_path":"how readers get to a hire page and book"}]}` }],
     });
-    const blogs = parseJSON(claudeText(bResp)).blogs || [];
+    blogs = parseJSON(claudeText(bResp)).blogs || [];
     for (const b of blogs) {
       const cluster = (b.cluster || []).map((q) => {
         const g = queries.find((x) => x.query.toLowerCase() === String(q).toLowerCase());
@@ -130,7 +136,10 @@ exports.handler = async (event) => {
       });
     }
 
-    const alts = await altText();
+    } catch (e) { errors.push('blogs: ' + e.message); }
+
+    try { alts = await altText(); } catch (e) { errors.push('alt text: ' + e.message); }
+    try {
 
     // 3) This week's plan: fits in Katie's 3 hours
     const { data: openNow } = await db.from('suggestions').select('id,category,title,detail,page_url,priority,effort_minutes').in('status', ['suggested', 'approved']).neq('category', 'images').order('created_at', { ascending: false }).limit(80);
@@ -145,7 +154,8 @@ exports.handler = async (event) => {
     const plan = parseJSON(claudeText(pResp));
     const monday = new Date(); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
     await db.from('weekly_plans').upsert({ week_of: monday.toISOString().slice(0, 10), budget_minutes: 180, summary: plan.summary || '', items: plan.items || [], emailed_at: null }, { onConflict: 'week_of' });
-    await endRun(run, 'ok', `${sugs.length} suggestions, ${blogs.length} blog ideas, ${alts} alt texts, ${measured} results measured`);
+    } catch (e) { errors.push('plan: ' + e.message); }
+    await endRun(run, errors.length ? 'partial' : 'ok', `${sugs.length} suggestions, ${blogs.length} blog ideas, ${alts} alt texts, ${measured} results measured${errors.length ? ' · problems: ' + errors.join(' | ') : ''}`);
     return json(200, { ok: true });
   } catch (e) {
     await endRun(run, 'error', e.message);

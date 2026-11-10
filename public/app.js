@@ -461,6 +461,8 @@
     if (p.get('gsc')) { history.replaceState(null, '', '/' + location.hash); setTimeout(() => toast(p.get('gsc') === 'connected' ? 'Search Console connected. Loading 90 days of data…' : 'Search Console: ' + p.get('gsc')), 300); }
     const h = location.hash.slice(1);
     go(TABS.some(([id]) => id === h) ? h : 'overview');
+    if (h && h !== 'overview') api('overview').then((o) => { cache.todo = o.todo; renderTabs(o.todo); renderStatus(o); }).catch(() => {});
+    setInterval(() => api('overview').then((o) => { renderStatus(o); }).catch(() => {}), 60000);
   }
 
   if (pass) api('overview').then(start).catch(() => showGate(false)); else showGate(false);
