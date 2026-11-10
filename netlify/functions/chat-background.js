@@ -21,6 +21,7 @@ const TOOLS = [
   { name: 'suggestions', description: 'Suggestions the dashboard has made (category: keywords, onpage, meta, technical, images, aeo; status: suggested, approved, done, dismissed), including measured results.', input_schema: { type: 'object', properties: { category: { type: 'string' }, status: { type: 'string' }, limit: { type: 'integer' } } } },
   { name: 'changes', description: 'Changes Katie has logged on the site, with 7 days before vs after clicks for that page.', input_schema: { type: 'object', properties: {} } },
   { name: 'ai_mentions', description: 'Latest AI-answer checks: for each parent question, whether Claude cited Baboodle, mentioned it, or named competitors instead.', input_schema: { type: 'object', properties: {} } },
+  { name: 'save_action', description: 'Save an action as a suggestion in the dashboard so it appears in its tab and can go into the weekly plan. ONLY use when Katie asks to save/add it.', input_schema: { type: 'object', properties: { category: { type: 'string', enum: ['keywords', 'onpage', 'meta', 'technical', 'images', 'aeo'] }, title: { type: 'string' }, detail: { type: 'string' }, page_url: { type: 'string' }, priority: { type: 'string', enum: ['high', 'medium', 'low'] }, effort_minutes: { type: 'integer' }, proposed: { type: 'object', description: 'e.g. {title, description, copy}' } }, required: ['category', 'title', 'detail'] } },
   { name: 'blog_ideas', description: 'Blog ideas with their strategy, expected bookings and status, and this week\'s 3-hour plan.', input_schema: { type: 'object', properties: {} } },
 ];
 
@@ -103,6 +104,10 @@ async function runTool(name, input = {}) {
       (cs || []).forEach((c) => { if (!latest[c.question_id]) latest[c.question_id] = c; });
       return (qs || []).map((q) => ({ question: q.question, ...(latest[q.id] || { status: 'not checked' }) }));
     }
+    case 'save_action': {
+      const { data, error } = await db.from('suggestions').insert({ category: input.category, title: input.title, detail: input.detail, page_url: input.page_url || null, priority: input.priority || 'medium', effort_minutes: input.effort_minutes || null, proposed: input.proposed || {}, status: 'approved' }).select('id').single();
+      return error ? { error: error.message } : { saved: true, id: data.id, note: 'Saved as an approved suggestion in the ' + input.category + ' tab.' };
+    }
     case 'blog_ideas': {
       const { data: b } = await db.from('blog_ideas').select('title,status,target_page,total_demand,expected_bookings,intent,cluster,ranking,conversion').order('expected_bookings', { ascending: false }).limit(15);
       const { data: p } = await db.from('weekly_plans').select('week_of,summary,items').order('week_of', { ascending: false }).limit(1).maybeSingle();
@@ -123,7 +128,13 @@ exports.handler = async (event) => {
 
 You are the assistant inside Baboodle's "search brain" SEO/AEO dashboard, talking to Katie (co-founder). Today is ${today}. She has about 3 hours a week for SEO and AEO, so be practical and prioritise.
 Answer from the data: call the tools to look things up before answering anything about Baboodle's performance, pages or rankings, and quote the real numbers with their date range. Google Search Console data lags about 2 days. If the data can't answer it, say so plainly rather than guessing. Use web search for things outside Baboodle's data (what ranks now, Google updates, competitor pages).
-Keep answers short and scannable: lead with the answer, then the evidence, then what to do (with rough minutes). British English, plain words, no SEO jargon without a short explanation. Use **bold** and simple lists; no tables wider than 4 columns.`;
+Keep answers short and scannable: lead with the answer, then the evidence, then what to do (with rough minutes).
+When Katie asks "what should I do about this" for an item from the dashboard, first look it up (e.g. page_performance and page_scan for the page, search_keywords for the search, web search for what ranks for it now), then answer in this shape:
+**What to do** – the single best action, specific to this item (which page, which section, what to change).
+**How** – 3–6 numbered steps she can do herself in Shopify, including ready-to-paste copy where it helps (a new Google title ≤60 characters, description ≤155, a heading, an FAQ, a paragraph, link text and where to put the link).
+**Time** – rough minutes.
+**Expected outcome** – what should move (position, clicks, click rate, AI mentions), roughly how much and how soon, and how she'll see it in the dashboard. Be honest when the opportunity is small or the data is thin, and say if a different page should own the search, or if it's not worth her time.
+End with one line: "Say **save it** and I'll add this to your suggestions." If she says save it, call save_action with the action (put paste-ready copy in proposed). British English, plain words, no SEO jargon without a short explanation. Use **bold** and simple lists; no tables wider than 4 columns.`;
 
     let answer = '';
     for (let turn = 0; turn < 8; turn++) {

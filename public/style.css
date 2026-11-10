@@ -143,3 +143,9 @@ details summary{cursor:pointer;font-weight:600}
 .chat__starters button:hover{border-color:var(--coral2)}
 .chat__form{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line2);align-items:flex-end}
 .chat__form textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:14px;padding:9px 12px;font:inherit;font-size:15px;max-height:140px}
+
+.ask{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;border-radius:50%;border:1px solid var(--line);background:var(--white);color:#D97757;cursor:pointer;padding:0;vertical-align:middle}
+.ask:hover{background:#FBEFEA;border-color:#D97757}
+.kpi,.card--lav{position:relative}
+.kpi > .ask,.card--lav > .ask{position:absolute;top:12px;right:12px}
+.notice .ask{background:rgba(255,255,255,.6)}

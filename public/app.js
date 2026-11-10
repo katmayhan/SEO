@@ -20,6 +20,8 @@
   const day = (d) => new Date(d + (String(d).length === 10 ? 'T12:00:00Z' : '')).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   const ago = (d) => { if (!d) return 'never'; const m = (Date.now() - new Date(d)) / 6e4; return m < 60 ? Math.round(m) + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'; };
   const label = { cited: 'Cited with link', mentioned: 'Named, no link', source_only: 'Used as a source', missing: 'Not mentioned', error: 'Check failed', positive: 'Positive', negative: 'Negative', neutral: 'No real change', too_early: 'Too early', idea: 'Idea', drafting: 'Writing…', draft_ready: 'Draft ready', in_shopify: 'In Shopify (unpublished)', published: 'Published', win: 'Win', loss: 'Worse', flat: 'Flat', suggested: 'New', approved: 'Approved', done: 'Done', dismissed: 'Dismissed' };
+  const SPARK = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M12 1.8l1.6 6.4 5.6-3.5-3.5 5.6 6.5 1.7-6.5 1.7 3.5 5.6-5.6-3.5L12 22.2l-1.6-6.4-5.6 3.5 3.5-5.6L1.8 12l6.5-1.7-3.5-5.6 5.6 3.5z"/></svg>';
+  const ask = (ctx) => `<button class="ask" type="button" data-ask="${esc(ctx)}" title="Ask Claude what to do about this" aria-label="Ask Claude what to do about this">${SPARK}</button>`;
   const pill = (cls, text) => `<span class="pill p-${esc(cls)}">${esc(text || label[cls] || cls)}</span>`;
 
   function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), 3200); }
@@ -114,6 +116,7 @@
         </div>
         <div class="item__actions">
           ${s.status !== 'suggested' ? pill(s.status) : ''}
+          ${ask(`Suggestion (${s.category}, ${s.priority} priority${s.page_url ? ', page ' + s.page_url : ''}): "${s.title}". ${s.detail || ''} ${s.proposed && Object.keys(s.proposed).length ? 'Proposed: ' + JSON.stringify(s.proposed) : ''} Talk me through exactly how to do this.`)}
           ${copyText(s) ? '<button class="btn btn--sm" data-act="copy">Copy</button>' : ''}
           ${s.status === 'suggested' ? '<button class="btn btn--sm" data-act="approved">Approve</button>' : ''}
           <button class="btn btn--sm btn--coral" data-act="done" title="Logs it as a change so its impact is measured">Mark done</button>
@@ -152,13 +155,13 @@
     const todoTotal = Object.values(o.todo || {}).reduce((x, y) => x + y, 0);
     v.innerHTML = `
       <div class="head"><div><h1>How we're doing this week</h1><p class="soft">${day(w.from)} – ${day(w.to)} vs ${day(w.prev_from)} – ${day(w.prev_to)} · Google data lags by about 2 days</p></div></div>
-      ${(o.alerts || []).map((al) => `<div class="notice ${al.severity === 'urgent' ? 'notice--coral' : ''}"><span><b>${esc(al.title)}</b>${al.detail ? ' · ' + esc(al.detail) : ''}</span><button class="btn btn--sm" data-alert="${al.id}">Got it</button></div>`).join('')}
+      ${(o.alerts || []).map((al) => `<div class="notice ${al.severity === 'urgent' ? 'notice--coral' : ''}"><span><b>${esc(al.title)}</b>${al.detail ? ' · ' + esc(al.detail) : ''}</span><span style="display:flex;gap:6px;align-items:center">${ask(`Alert: ${al.title}. ${al.detail || ''}`)}<button class="btn btn--sm" data-alert="${al.id}">Got it</button></span></div>`).join('')}
       ${planHTML(o.plan)}
       <div class="grid g4">
-        <div class="card kpi"><div class="label">Clicks from Google</div><div class="num">${n0(w.now.clicks)}</div>${delta(w.now.clicks, w.prev.clicks)}</div>
-        <div class="card kpi"><div class="label">Times shown in Google</div><div class="num">${n0(w.now.impressions)}</div>${delta(w.now.impressions, w.prev.impressions)}</div>
-        <div class="card kpi"><div class="label">Click rate</div><div class="num">${pct(w.now.ctr)}</div>${delta(w.now.ctr, w.prev.ctr)}</div>
-        <div class="card kpi"><div class="label">Average position</div><div class="num">${pos(w.now.position)}</div>${delta(w.now.position, w.prev.position, false, 'pos')}</div>
+        <div class="card kpi">${ask(`Whole-site Google clicks: ${w.now.clicks} in ${w.from} to ${w.to} vs ${w.prev.clicks} the 7 days before.`)}<div class="label">Clicks from Google</div><div class="num">${n0(w.now.clicks)}</div>${delta(w.now.clicks, w.prev.clicks)}</div>
+        <div class="card kpi">${ask(`Whole-site Google impressions: ${w.now.impressions} in ${w.from} to ${w.to} vs ${w.prev.impressions} the 7 days before.`)}<div class="label">Times shown in Google</div><div class="num">${n0(w.now.impressions)}</div>${delta(w.now.impressions, w.prev.impressions)}</div>
+        <div class="card kpi">${ask(`Whole-site click rate: ${pct(w.now.ctr)} in ${w.from} to ${w.to} vs ${pct(w.prev.ctr)} the 7 days before.`)}<div class="label">Click rate</div><div class="num">${pct(w.now.ctr)}</div>${delta(w.now.ctr, w.prev.ctr)}</div>
+        <div class="card kpi">${ask(`Whole-site average Google position: ${pos(w.now.position)} in ${w.from} to ${w.to} vs ${pos(w.prev.position)} the 7 days before.`)}<div class="label">Average position</div><div class="num">${pos(w.now.position)}</div>${delta(w.now.position, w.prev.position, false, 'pos')}</div>
       </div>
 
       <div class="section card"><div class="head" style="margin-bottom:6px"><h3>Clicks from Google, last 8 weeks</h3><div class="seg" id="metric"><button class="on" data-m="clicks">Clicks</button><button data-m="impressions">Shown</button><button data-m="position">Position</button></div></div>
@@ -174,16 +177,16 @@
             const perB = b.days ? b.clicks / b.days : null, perA = a2.days ? a2.clicks / a2.days : null;
             return `<div class="change"><div><div class="item__title">${esc(c.description)}</div><div class="item__meta">${day(c.date)}${c.page_url ? ' · ' + esc(c.page_url) : ''}</div>
               <div class="ba"><span>Before <b>${perB == null ? '—' : perB.toFixed(1)}</b>/day · pos ${pos(b.position)}</span><span>After <b>${perA == null ? '—' : perA.toFixed(1)}</b>/day · pos ${pos(a2.position)}</span></div></div>
-              <div>${pill(c.verdict, c.verdict === 'too_early' ? `Too early (${c.days_after} days)` : null)}</div></div>`;
+              <div style="display:flex;gap:6px;align-items:flex-start">${pill(c.verdict, c.verdict === 'too_early' ? `Too early (${c.days_after} days)` : null)}${ask(`Change made on ${c.date}${c.page_url ? ' to ' + c.page_url : ''}: "${c.description}". Clicks/day before ${perB == null ? 'n/a' : perB.toFixed(1)}, after ${perA == null ? 'n/a' : perA.toFixed(1)}; position before ${pos(b.position)}, after ${pos(a2.position)}. Verdict so far: ${c.verdict}.`)}</div></div>`;
           }).join('') || '<p class="soft">No changes logged yet.</p>'}</div></div>
 
         <div class="grid" style="align-content:start">
           <div class="card"><h3>Biggest ranking moves</h3>
-            <div class="tablewrap"><table><thead><tr><th>Search</th><th class="num">Was</th><th class="num">Now</th><th class="num">Shown</th></tr></thead><tbody>
-            ${(o.gainers || []).map((m) => `<tr><td>${esc(m.query)}<div class="url">${esc(m.page)}</div></td><td class="num">${pos(m.pos_prev)}</td><td class="num up"><b>${pos(m.pos_now)}</b></td><td class="num">${n0(m.impr_now)}</td></tr>`).join('')}
-            ${(o.losers || []).map((m) => `<tr><td>${esc(m.query)}<div class="url">${esc(m.page)}</div></td><td class="num">${pos(m.pos_prev)}</td><td class="num down"><b>${pos(m.pos_now)}</b></td><td class="num">${n0(m.impr_now)}</td></tr>`).join('') || ''}
+            <div class="tablewrap"><table><thead><tr><th>Search</th><th class="num">Was</th><th class="num">Now</th><th class="num">Shown</th><th></th></tr></thead><tbody>
+            ${(o.gainers || []).map((m) => `<tr><td>${esc(m.query)}<div class="url">${esc(m.page)}</div></td><td class="num">${pos(m.pos_prev)}</td><td class="num up"><b>${pos(m.pos_now)}</b></td><td class="num">${n0(m.impr_now)}</td><td>${ask(`Search "${m.query}" (page ${m.page}) moved up from position ${pos(m.pos_prev)} to ${pos(m.pos_now)} this week, shown ${m.impr_now} times.`)}</td></tr>`).join('')}
+            ${(o.losers || []).map((m) => `<tr><td>${esc(m.query)}<div class="url">${esc(m.page)}</div></td><td class="num">${pos(m.pos_prev)}</td><td class="num down"><b>${pos(m.pos_now)}</b></td><td class="num">${n0(m.impr_now)}</td><td>${ask(`Search "${m.query}" (page ${m.page}) dropped from position ${pos(m.pos_prev)} to ${pos(m.pos_now)} this week, shown ${m.impr_now} times.`)}</td></tr>`).join('') || ''}
             </tbody></table></div>${!(o.gainers || []).length && !(o.losers || []).length ? '<p class="soft small">Needs two full weeks of data.</p>' : ''}</div>
-          <div class="card card--lav"><h3>AI mentions</h3><p style="margin:0">${a.checked ? `Claude names Baboodle in <b>${a.mentioned} of ${a.checked}</b> parent questions and links to you in <b>${a.cited}</b>.` : 'The first AI check runs with the weekly check.'}</p>
+          <div class="card card--lav">${ask(`AI mentions: Claude names Baboodle in ${a.mentioned} of ${a.checked} parent questions and links in ${a.cited}. Named instead: ${(a.competitors || []).map((c) => c[0]).join(', ')}.`)}<h3>AI mentions</h3><p style="margin:0">${a.checked ? `Claude names Baboodle in <b>${a.mentioned} of ${a.checked}</b> parent questions and links to you in <b>${a.cited}</b>.` : 'The first AI check runs with the weekly check.'}</p>
             ${a.competitors && a.competitors.length ? `<p class="small" style="margin:8px 0 0">Named instead: ${a.competitors.map(([c, k]) => `${esc(c)} (${k})`).join(', ')}</p>` : ''}
             <p style="margin:10px 0 0"><button class="btn btn--sm" data-go="aeo">See all questions</button></p></div>
           <div class="card"><h3>Waiting for you</h3><p style="margin:0 0 8px">${todoTotal} suggestion${todoTotal === 1 ? '' : 's'} · ${o.drafts_ready} blog draft${o.drafts_ready === 1 ? '' : 's'} ready</p>
@@ -191,8 +194,8 @@
         </div>
       </div>
 
-      <div class="section card"><h3>Top pages this week</h3><div class="tablewrap"><table><thead><tr><th>Page</th><th class="num">Clicks</th><th class="num">Last week</th><th class="num">Position</th><th class="num">Last week</th></tr></thead><tbody>
-        ${(o.pages || []).map((p) => `<tr><td><a href="https://baboodle.co.uk${esc(p.page)}" target="_blank" rel="noopener">${esc(p.page)}</a></td><td class="num">${n0(p.clicks)}</td><td class="num ${p.clicks > p.prev_clicks ? 'up' : p.clicks < p.prev_clicks ? 'down' : ''}">${n0(p.prev_clicks)}</td><td class="num">${pos(p.pos)}</td><td class="num">${pos(p.prev_pos)}</td></tr>`).join('')}
+      <div class="section card"><h3>Top pages this week</h3><div class="tablewrap"><table><thead><tr><th>Page</th><th class="num">Clicks</th><th class="num">Last week</th><th class="num">Position</th><th class="num">Last week</th><th></th></tr></thead><tbody>
+        ${(o.pages || []).map((p) => `<tr><td><a href="https://baboodle.co.uk${esc(p.page)}" target="_blank" rel="noopener">${esc(p.page)}</a></td><td class="num">${n0(p.clicks)}</td><td class="num ${p.clicks > p.prev_clicks ? 'up' : p.clicks < p.prev_clicks ? 'down' : ''}">${n0(p.prev_clicks)}</td><td class="num">${pos(p.pos)}</td><td class="num">${pos(p.prev_pos)}</td><td>${ask(`Page ${p.page}: ${p.clicks} Google clicks this week vs ${p.prev_clicks} last week; position ${pos(p.pos)} vs ${pos(p.prev_pos)}; shown ${p.impressions} times.`)}</td></tr>`).join('')}
       </tbody></table></div></div>`;
 
     drawChart(o, 'clicks');
@@ -214,7 +217,7 @@
       <div class="list">${plan.items.map((i, k) => `<div class="item"><div class="pill ${i.status === 'done' ? 'p-done' : 'p-low'}">${i.status === 'done' ? '✓ ' : ''}${esc(i.minutes)} min</div>
         <div class="item__main"><div class="item__title">${k + 1}. ${esc(i.title)}</div><div class="item__meta">${esc(i.why || '')}</div>
         ${(i.steps || []).length ? `<ol class="small" style="margin:6px 0 0;padding-left:18px">${i.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}</div>
-        <div class="item__actions">${i.type === 'suggestion' && i.ref_id && i.status !== 'done' ? `<button class="btn btn--sm btn--coral" data-plan-done="${esc(i.ref_id)}">Mark done</button>` : ''}${goTab[i.type] && goTab[i.type] !== 'overview' ? `<button class="btn btn--sm" data-go="${goTab[i.type]}">Open</button>` : ''}</div></div>`).join('')}</div></div>`;
+        <div class="item__actions">${ask(`This week's plan item: "${i.title}" (${i.minutes} min). ${i.why || ''} Steps: ${(i.steps || []).join(' / ')}. Walk me through doing this now.`)}${i.type === 'suggestion' && i.ref_id && i.status !== 'done' ? `<button class="btn btn--sm btn--coral" data-plan-done="${esc(i.ref_id)}">Mark done</button>` : ''}${goTab[i.type] && goTab[i.type] !== 'overview' ? `<button class="btn btn--sm" data-go="${goTab[i.type]}">Open</button>` : ''}</div></div>`).join('')}</div></div>`;
   }
 
   function drawChart(o, metric) {
@@ -243,14 +246,14 @@
     v.innerHTML = `<div class="head"><div><h1>Keywords</h1><p class="soft">Each row is a search people typed into Google, with the page of yours Google showed for it (one page often appears for many searches). Last 28 days${k.to ? ', to ' + day(k.to) : ''}. Hover a label for what it means. Search volumes from Keyword Planner appear once Google Ads is connected.</p></div></div>
       <div class="card" id="ksug"><h3>Keyword suggestions</h3>${suggestionList(sug.rows, 'New keyword ideas arrive with the weekly check.')}</div>
       <div class="section card"><div class="filters"><div class="seg" id="kf"><button data-f="opps" class="on">Opportunities</button><button data-f="ctr">Seen, not clicked</button><button data-f="top3">Top 3</button><button data-f="all">All</button></div><input id="kq" placeholder="Filter searches, e.g. travel" aria-label="Filter searches"></div>
-        <div class="tablewrap"><table><thead><tr><th class="sort" data-s="query">Search</th><th>Page Google shows</th><th class="num sort" data-s="impressions">Shown</th><th class="num sort" data-s="clicks">Clicks</th><th class="num sort" data-s="ctr">Click rate</th><th class="num sort" data-s="pos">Position</th><th class="num">Monthly searches</th><th></th></tr></thead><tbody id="kt"></tbody></table></div></div>`;
+        <div class="tablewrap"><table><thead><tr><th class="sort" data-s="query">Search</th><th>Page Google shows</th><th class="num sort" data-s="impressions">Shown</th><th class="num sort" data-s="clicks">Clicks</th><th class="num sort" data-s="ctr">Click rate</th><th class="num sort" data-s="pos">Position</th><th class="num">Monthly searches</th><th></th><th></th></tr></thead><tbody id="kt"></tbody></table></div></div>`;
     const draw = () => {
       let rows = k.rows.filter((r) => !q || r.query.includes(q));
       if (filter === 'opps') rows = rows.filter((r) => r.pos >= 4 && r.pos <= 20 && r.impressions >= 30);
       if (filter === 'ctr') rows = rows.filter((r) => r.pos <= 6 && r.impressions >= 40 && r.ctr < 0.05);
       if (filter === 'top3') rows = rows.filter((r) => r.pos <= 3);
       rows.sort((a, b) => (a[sortKey] > b[sortKey] ? 1 : -1) * dir);
-      $('#kt').innerHTML = rows.slice(0, 250).map((r) => `<tr><td>${esc(r.query)}</td><td class="url">${esc(r.page)}</td><td class="num">${n0(r.impressions)}</td><td class="num">${n0(r.clicks)}</td><td class="num">${pct(r.ctr)}</td><td class="num">${pos(r.pos)}</td><td class="num soft">—</td><td>${r.pos >= 4 && r.pos <= 10 && r.impressions >= 30 ? `<span title="You're on page 1 but below the top 3. Small content or link improvements can move it up.">${pill('medium', 'Close to top 3')}</span>` : r.pos > 10 && r.impressions >= 30 ? `<span title="Shown on page 2 of Google, where almost nobody clicks.">${pill('high', 'On page 2')}</span>` : r.ctr < 0.05 && r.pos <= 6 && r.impressions >= 40 ? `<span title="Near the top but rarely clicked. Either the Google title/description doesn't match what people want, or Google is showing you in an AI Overview, image box or panel rather than as a normal link.">${pill('medium', 'Seen, not clicked')}</span>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="soft">Nothing matches.</td></tr>';
+      $('#kt').innerHTML = rows.slice(0, 250).map((r) => `<tr><td>${esc(r.query)}</td><td class="url">${esc(r.page)}</td><td class="num">${n0(r.impressions)}</td><td class="num">${n0(r.clicks)}</td><td class="num">${pct(r.ctr)}</td><td class="num">${pos(r.pos)}</td><td class="num soft">—</td><td>${r.pos >= 4 && r.pos <= 10 && r.impressions >= 30 ? `<span title="You're on page 1 but below the top 3. Small content or link improvements can move it up.">${pill('medium', 'Close to top 3')}</span>` : r.pos > 10 && r.impressions >= 30 ? `<span title="Shown on page 2 of Google, where almost nobody clicks.">${pill('high', 'On page 2')}</span>` : r.ctr < 0.05 && r.pos <= 6 && r.impressions >= 40 ? `<span title="Near the top but rarely clicked. Either the Google title/description doesn't match what people want, or Google is showing you in an AI Overview, image box or panel rather than as a normal link.">${pill('medium', 'Seen, not clicked')}</span>` : ''}</td><td>${ask(`Search "${r.query}": shown ${r.impressions} times in the last 28 days, ${r.clicks} clicks (${pct(r.ctr)}), average position ${pos(r.pos)}, page Google shows: ${r.page}.`)}</td></tr>`).join('') || '<tr><td colspan="9" class="soft">Nothing matches.</td></tr>';
     };
     draw();
     $('#kf').onclick = (e) => { const b = e.target.closest('[data-f]'); if (!b) return; filter = b.dataset.f; [...$('#kf').children].forEach((x) => x.classList.toggle('on', x === b)); draw(); };
@@ -271,16 +274,16 @@
   VIEWS.onpage = async (v) => {
     const p = await suggestionTab(v, 'onpage', 'On-page content', 'Pages checked against the searches they should win: words used, headings, FAQs and links.', () => api('pages'));
     const rows = (p.pages || []).filter((x) => ['collection', 'page', 'home', 'blog'].includes(x.page_type) && x.status === 200).sort((a, b) => ((b.m && b.m.impressions) || 0) - ((a.m && a.m.impressions) || 0));
-    $('#extra').innerHTML = `<div class="section card"><h3>Content pages</h3><div class="tablewrap"><table><thead><tr><th>Page</th><th>Main heading</th><th class="num">Words</th><th>FAQs</th><th class="num">Links in</th><th class="num">Shown (28d)</th><th class="num">Position</th></tr></thead><tbody>
-      ${rows.slice(0, 150).map((x) => `<tr><td><a href="https://baboodle.co.uk${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a></td><td>${esc(x.h1 || '—')}</td><td class="num ${x.word_count < 250 ? 'down' : ''}">${n0(x.word_count)}</td><td>${x.has_faq_schema ? pill('cited', 'Yes') : pill('low', 'No')}</td><td class="num ${!x.internal_links_in ? 'down' : ''}">${n0(x.internal_links_in)}</td><td class="num">${n0(x.m && x.m.impressions)}</td><td class="num">${pos(x.m && x.m.pos)}</td></tr>`).join('') || '<tr><td colspan="7" class="soft">The site scan hasn\'t run yet.</td></tr>'}
+    $('#extra').innerHTML = `<div class="section card"><h3>Content pages</h3><div class="tablewrap"><table><thead><tr><th>Page</th><th>Main heading</th><th class="num">Words</th><th>FAQs</th><th class="num">Links in</th><th class="num">Shown (28d)</th><th class="num">Position</th><th></th></tr></thead><tbody>
+      ${rows.slice(0, 150).map((x) => `<tr><td><a href="https://baboodle.co.uk${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a></td><td>${esc(x.h1 || '—')}</td><td class="num ${x.word_count < 250 ? 'down' : ''}">${n0(x.word_count)}</td><td>${x.has_faq_schema ? pill('cited', 'Yes') : pill('low', 'No')}</td><td class="num ${!x.internal_links_in ? 'down' : ''}">${n0(x.internal_links_in)}</td><td class="num">${n0(x.m && x.m.impressions)}</td><td class="num">${pos(x.m && x.m.pos)}</td><td>${ask(`Page ${x.url}: H1 "${x.h1 || 'none'}", ${x.word_count} words, FAQs ${x.has_faq_schema ? 'yes' : 'no'}, ${x.internal_links_in} links in from other pages, shown ${x.m ? x.m.impressions : 0} times in 28 days at position ${pos(x.m && x.m.pos)}. Issues: ${(x.issues || []).map((i) => i.text).join('; ') || 'none'}. How do I improve this page's content?`)}</td></tr>`).join('') || '<tr><td colspan="8" class="soft">The site scan hasn\'t run yet.</td></tr>'}
     </tbody></table></div></div>`;
   };
 
   VIEWS.meta = async (v) => {
     const p = await suggestionTab(v, 'meta', 'Meta titles and descriptions', 'Pages where lots of people see you in Google but few click. Copy the new wording into Shopify, then press "Mark done" so the result is measured.', () => api('pages'));
     const rows = (p.pages || []).filter((x) => x.status === 200 && (x.issues || []).some((i) => /title|meta/.test(i.code)));
-    $('#extra').innerHTML = `<div class="section card"><h3>Title and description issues (${rows.length})</h3><div class="tablewrap"><table><thead><tr><th>Page</th><th>Title</th><th>Issues</th></tr></thead><tbody>
-      ${rows.slice(0, 200).map((x) => `<tr><td class="url">${esc(x.url)}</td><td>${esc(x.title || '—')}<div class="url">${esc(x.meta_description || 'no description')}</div></td><td>${(x.issues || []).filter((i) => /title|meta/.test(i.code)).map((i) => esc(i.text)).join('<br>')}</td></tr>`).join('') || '<tr><td colspan="3" class="soft">No issues found.</td></tr>'}</tbody></table></div></div>`;
+    $('#extra').innerHTML = `<div class="section card"><h3>Title and description issues (${rows.length})</h3><div class="tablewrap"><table><thead><tr><th>Page</th><th>Title</th><th>Issues</th><th></th></tr></thead><tbody>
+      ${rows.slice(0, 200).map((x) => `<tr><td class="url">${esc(x.url)}</td><td>${esc(x.title || '—')}<div class="url">${esc(x.meta_description || 'no description')}</div></td><td>${(x.issues || []).filter((i) => /title|meta/.test(i.code)).map((i) => esc(i.text)).join('<br>')}</td><td>${ask(`Page ${x.url}: Google title "${x.title || 'none'}", description "${x.meta_description || 'none'}". Issues: ${(x.issues || []).filter((i) => /title|meta/.test(i.code)).map((i) => i.text).join('; ')}. Write me a better title and description.`)}</td></tr>`).join('') || '<tr><td colspan="3" class="soft">No issues found.</td></tr>'}</tbody></table></div></div>`;
   };
 
   VIEWS.technical = async (v) => {
@@ -290,12 +293,12 @@
     const order = { high: 0, medium: 1, low: 2 };
     const list = Object.values(groups).sort((a, b) => order[a.sev] - order[b.sev] || b.urls.length - a.urls.length);
     $('#extra').innerHTML = `<div class="section card"><h3>Crawl findings · ${n0((p.pages || []).length)} pages scanned</h3><div class="list">
-      ${list.map((g) => `<div class="item"><div>${pill(g.sev)}</div><div class="item__main"><details><summary>${esc(g.text)} · ${g.urls.length} page${g.urls.length === 1 ? '' : 's'}</summary><div class="proposed">${g.urls.slice(0, 60).map((u) => `${esc(u.url)} – ${esc(u.text)}`).join('<br>')}</div></details></div></div>`).join('') || '<p class="soft">The site scan hasn\'t run yet.</p>'}</div></div>`;
+      ${list.map((g) => `<div class="item"><div>${pill(g.sev)}</div><div class="item__actions" style="order:3">${ask(`Technical issue from the site scan: "${g.text}" on ${g.urls.length} page(s), e.g. ${g.urls.slice(0, 8).map((u) => u.url).join(', ')}.`)}</div><div class="item__main"><details><summary>${esc(g.text)} · ${g.urls.length} page${g.urls.length === 1 ? '' : 's'}</summary><div class="proposed">${g.urls.slice(0, 60).map((u) => `${esc(u.url)} – ${esc(u.text)}`).join('<br>')}</div></details></div></div>`).join('') || '<p class="soft">The site scan hasn\'t run yet.</p>'}</div></div>`;
   };
 
   VIEWS.images = async (v) => {
     const p = await suggestionTab(v, 'images', 'Images and alt text', 'Alt text helps Google Images and screen readers. Claude writes it from the product and the image file; copy it into Shopify, then mark it done.', () => api('pages'));
-    $('#extra').innerHTML = `<div class="section grid g4"><div class="card kpi"><div class="label">Images checked</div><div class="num">${n0(p.images)}</div></div><div class="card kpi"><div class="label">Missing alt text</div><div class="num">${n0(p.images_no_alt)}</div></div><div class="card kpi"><div class="label">Pages affected</div><div class="num">${n0((p.pages || []).filter((x) => x.img_missing_alt).length)}</div></div></div>`;
+    $('#extra').innerHTML = `<div class="section grid g4"><div class="card kpi"><div class="label">Images checked</div><div class="num">${n0(p.images)}</div></div><div class="card kpi">${ask(`${p.images_no_alt} of ${p.images} images on baboodle.co.uk have no alt text, across ${(p.pages || []).filter((x) => x.img_missing_alt).length} pages.`)}<div class="label">Missing alt text</div><div class="num">${n0(p.images_no_alt)}</div></div><div class="card kpi"><div class="label">Pages affected</div><div class="num">${n0((p.pages || []).filter((x) => x.img_missing_alt).length)}</div></div></div>`;
   };
 
   VIEWS.blogs = async (v) => {
@@ -316,7 +319,7 @@
     const c = b.conversion || {}, cl = b.cluster || {}, o = b.outline || {}, r = b.ranking || {};
     return `<div class="card" style="margin-bottom:12px">
       <div class="head" style="margin:0"><div><h3>${esc(b.title)}</h3><p class="soft small">${n0(b.total_demand)} times shown a month · feeds ${esc(b.target_page || '—')} · about <b>${c.bookings != null ? c.bookings : '—'}</b> bookings a month</p></div>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${pill(b.status)}<button class="btn btn--sm" data-blog="toggle" data-id="${b.id}">See strategy</button>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${pill(b.status)}${ask(`Blog idea "${b.title}" (feeds ${b.target_page}, ${b.total_demand} views a month, about ${c.bookings} bookings a month expected, status ${b.status}).`)}<button class="btn btn--sm" data-blog="toggle" data-id="${b.id}">See strategy</button>
         ${b.status === 'idea' ? `<button class="btn btn--sm btn--coral" data-blog="write" data-id="${b.id}">Write draft</button>` : ''}${['draft_ready', 'in_shopify'].includes(b.status) ? `<button class="btn btn--sm btn--coral" data-blog="review" data-id="${b.id}">Review draft</button>` : ''}</div></div>
       <div id="s-${b.id}" hidden>
         <div class="strategy">
@@ -375,7 +378,7 @@
         <div class="tablewrap"><table><thead><tr><th>Question</th><th>Latest</th><th>Last 6 weeks</th><th>Named instead</th><th></th></tr></thead><tbody>
         ${a.rows.map((r) => `<tr style="${r.active ? '' : 'opacity:.5'}"><td>${esc(r.question)}${r.latest && r.latest.answer ? `<details><summary class="tiny soft">Claude's answer</summary><div class="proposed">${esc(r.latest.answer)}</div></details>` : ''}</td><td>${r.latest ? pill(r.latest.status) : pill('not', 'Not checked')}</td>
           <td><div class="dots">${r.history.slice().reverse().map((h) => `<span class="dot ${esc(h.status)}" title="${esc(label[h.status] || h.status)} · ${day(h.at)}"></span>`).join('')}</div></td>
-          <td class="small">${esc(((r.latest && r.latest.competitors) || []).join(', '))}</td><td><button class="btn btn--sm btn--ghost" data-q="${r.id}" data-on="${r.active ? 0 : 1}">${r.active ? 'Pause' : 'Resume'}</button></td></tr>`).join('')}
+          <td class="small">${esc(((r.latest && r.latest.competitors) || []).join(', '))}</td><td style="white-space:nowrap">${ask(`AI question "${r.question}": latest result ${r.latest ? label[r.latest.status] || r.latest.status : 'not checked'}; named instead: ${((r.latest && r.latest.competitors) || []).join(', ') || 'nobody'}. How do I get Baboodle cited for this?`)}<button class="btn btn--sm btn--ghost" data-q="${r.id}" data-on="${r.active ? 0 : 1}">${r.active ? 'Pause' : 'Resume'}</button></td></tr>`).join('')}
         </tbody></table></div></div>`;
     wireSuggestions($('#asug'), sug.rows, () => go('aeo'));
     $('#addq').onsubmit = async (e) => { e.preventDefault(); await post('question', { question: new FormData(e.target).get('question') }); toast('Added. It\'s checked from next Monday.'); go('aeo'); };
@@ -385,8 +388,8 @@
   VIEWS.results = async (v) => {
     const r = await api('results');
     v.innerHTML = `<div class="head"><div><h1>Results</h1><p class="soft">Every suggestion you mark done is measured 28 days later: clicks and position on that page, 28 days before vs 28 days after.</p></div></div>
-      <div class="card"><div class="tablewrap"><table><thead><tr><th>Change</th><th>Done</th><th class="num">Clicks before</th><th class="num">Clicks after</th><th class="num">Position</th><th>Result</th></tr></thead><tbody>
-      ${r.rows.map((s) => { const x = s.result || {}; return `<tr><td>${esc(s.title)}<div class="url">${esc(s.page_url || '')}</div></td><td>${s.actioned_at ? day(s.actioned_at.slice(0, 10)) : '—'}</td><td class="num">${n0(x.clicks_before)}</td><td class="num">${n0(x.clicks_after)}</td><td class="num">${x.position_before ? `${pos(x.position_before)} → ${pos(x.position_after)}` : '—'}</td><td>${x.verdict ? pill(x.verdict) : pill('too_early', 'Measuring')}</td></tr>`; }).join('') || '<tr><td colspan="6" class="soft">Nothing marked done yet.</td></tr>'}
+      <div class="card"><div class="tablewrap"><table><thead><tr><th>Change</th><th>Done</th><th class="num">Clicks before</th><th class="num">Clicks after</th><th class="num">Position</th><th>Result</th><th></th></tr></thead><tbody>
+      ${r.rows.map((s) => { const x = s.result || {}; return `<tr><td>${esc(s.title)}<div class="url">${esc(s.page_url || '')}</div></td><td>${s.actioned_at ? day(s.actioned_at.slice(0, 10)) : '—'}</td><td class="num">${n0(x.clicks_before)}</td><td class="num">${n0(x.clicks_after)}</td><td class="num">${x.position_before ? `${pos(x.position_before)} → ${pos(x.position_after)}` : '—'}</td><td>${x.verdict ? pill(x.verdict) : pill('too_early', 'Measuring')}</td><td>${ask(`Result of "${s.title}" (${s.page_url || ''}, done ${s.actioned_at ? s.actioned_at.slice(0, 10) : ''}): clicks ${x.clicks_before ?? 'n/a'} → ${x.clicks_after ?? 'n/a'}, position ${x.position_before ?? 'n/a'} → ${x.position_after ?? 'n/a'}, verdict ${x.verdict || 'still measuring'}. What should I do next?`)}</td></tr>`; }).join('') || '<tr><td colspan="6" class="soft">Nothing marked done yet.</td></tr>'}
       </tbody></table></div></div>`;
   };
 
@@ -436,6 +439,15 @@
     box.scrollTop = box.scrollHeight;
     try { await post('chat-send', { thread_id: threadId, text }); loadChat(); } catch (err) { toast(err.message); }
   }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-ask]');
+    if (!b) return;
+    e.stopPropagation();
+    $('#chat').hidden = false; $('#chat-open').hidden = true;
+    threadId = newThread();
+    renderChat([]);
+    sendChat(`What should I do about this, and what outcome should I expect?\n\n${b.dataset.ask}`);
+  });
   $('#chat-open').onclick = () => { $('#chat').hidden = false; $('#chat-open').hidden = true; loadChat(); $('#chat-input').focus(); };
   $('#chat-close').onclick = () => { $('#chat').hidden = true; $('#chat-open').hidden = false; clearTimeout(polling); };
   $('#chat-new').onclick = () => { threadId = newThread(); renderChat([]); };
