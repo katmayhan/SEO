@@ -166,6 +166,10 @@ exports.handler = async (event) => {
         const { data } = await db.from('blog_ideas').select('*').eq('id', q.id).single();
         return json(200, data);
       }
+      if (action === 'strategy') {
+        const { data } = await db.from('settings').select('value,updated_at').eq('key', 'strategy').maybeSingle();
+        return json(200, data || { value: '' });
+      }
       if (action === 'chat') {
         const { data } = await db.from('chat_messages').select('id,role,content,status,created_at').eq('thread_id', q.thread_id).order('created_at').limit(100);
         return json(200, { rows: data || [] });
@@ -189,6 +193,10 @@ exports.handler = async (event) => {
       }
       if (action === 'change') {
         await db.from('changes').insert({ date: body.date || iso(new Date()), page_url: body.page_url || null, description: body.description, source: 'manual' });
+        return json(200, { ok: true });
+      }
+      if (action === 'save-strategy') {
+        await db.from('settings').upsert({ key: 'strategy', value: String(body.value || '').slice(0, 20000), updated_at: new Date().toISOString() });
         return json(200, { ok: true });
       }
       if (action === 'chat-send') {

@@ -1,6 +1,7 @@
 // Weekly analysis: turns Search Console + site scan + AI checks into suggestions per tab,
 // blog ideas with a full strategy, alt-text proposals, and measures changes made 28+ days ago.
-const { db, json, isJobCall, startRun, endRun, claude, claudeJSON, claudeText, parseJSON, MODEL_MAIN, MODEL_FAST, BRAND_BRIEF } = require('../../lib/shared');
+const { db, json, isJobCall, startRun, endRun, claude, claudeJSON, claudeText, parseJSON, MODEL_MAIN, MODEL_FAST, BRAND_BRIEF: BASE_BRIEF, strategyBrief } = require('../../lib/shared');
+let BRAND_BRIEF = BASE_BRIEF;
 
 const SUG_SCHEMA = { type: 'object', properties: { suggestions: { type: 'array', items: { type: 'object', properties: { category: { type: 'string', enum: ['keywords', 'onpage', 'meta', 'technical', 'aeo'] }, title: { type: 'string' }, detail: { type: 'string' }, page_url: { type: ['string', 'null'] }, priority: { type: 'string', enum: ['high', 'medium', 'low'] }, effort_minutes: { type: 'integer' }, proposed: { type: 'object' } }, required: ['category', 'title', 'detail', 'priority', 'effort_minutes'] } } }, required: ['suggestions'] };
 const ALT_SCHEMA = { type: 'object', properties: { alts: { type: 'array', items: { type: 'object', properties: { i: { type: 'integer' }, alt: { type: 'string' } }, required: ['i', 'alt'] } } }, required: ['alts'] };
@@ -70,6 +71,7 @@ exports.handler = async (event) => {
   const { data: busy } = await db.from('runs').select('id').eq('job', 'analyze').eq('status', 'running').gte('started_at', new Date(Date.now() - 20 * 60000).toISOString()).limit(1);
   if (busy && busy.length) return json(200, { skipped: 'already running' });
   const run = await startRun('analyze');
+  BRAND_BRIEF = await strategyBrief();
   try {
     const measured = await measure();
 
@@ -108,8 +110,8 @@ exports.handler = async (event) => {
     try {
     const sOut = await claudeJSON({
       model: MODEL_MAIN, max_tokens: 16000, schema: SUG_SCHEMA,
-      system: BRAND_BRIEF + '\nYou are Baboodle\'s SEO and AEO strategist. Be specific: name the page, the search, the number. Prioritise by likely extra bookings. Do not repeat open suggestions or suggest undoing recent changes. Note: Search Console has no search-volume data, impressions are your demand signal.',
-      messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 10–15 new suggestions (keep each detail under 60 words and copy under 120 words) across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect","page_url":"/path or null","priority":"high|medium|low","effort_minutes":15,"proposed":{}}]}  (effort_minutes = realistic time for Katie to do it herself in Shopify, 5–90)` }],
+      system: BRAND_BRIEF + '\nYou are Baboodle\'s SEO and AEO strategist. Be specific: name the page, the search, the number. Prioritise by how much it moves Baboodle's strategy (long-term customers and the priority categories) and likely extra bookings. Do not repeat open suggestions or suggest undoing recent changes. Note: Search Console has no search-volume data, impressions are your demand signal.',
+      messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 10–15 new suggestions (keep each detail under 60 words and copy under 120 words) across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect, and which part of the strategy it serves","page_url":"/path or null","priority":"high|medium|low","effort_minutes":15,"proposed":{}}]}  (effort_minutes = realistic time for Katie to do it herself in Shopify, 5–90)` }],
     });
     sugs = (sOut.suggestions || []).filter((s) => s.title && s.category);
     if (sugs.length) await db.from('suggestions').insert(sugs.map((s) => ({ category: s.category, title: s.title, detail: s.detail, page_url: s.page_url || null, priority: s.priority || 'medium', effort_minutes: s.effort_minutes || null, proposed: s.proposed || {} })));

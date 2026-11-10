@@ -8,7 +8,7 @@
 
   const TABS = [
     ['overview', 'Overview'], ['keywords', 'Keywords'], ['onpage', 'On-page content'], ['meta', 'Meta titles'],
-    ['technical', 'Technical'], ['images', 'Images and alt text'], ['blogs', 'Blogs'], ['aeo', 'AI mentions'], ['results', 'Results'],
+    ['technical', 'Technical'], ['images', 'Images and alt text'], ['blogs', 'Blogs'], ['aeo', 'AI mentions'], ['results', 'Results'], ['strategy', 'Strategy'],
   ];
 
   // ---------- helpers ----------
@@ -385,6 +385,18 @@
     wireSuggestions($('#asug'), sug.rows, () => go('aeo'));
     $('#addq').onsubmit = async (e) => { e.preventDefault(); await post('question', { question: new FormData(e.target).get('question') }); toast('Added. It\'s checked from next Monday.'); go('aeo'); };
     v.querySelectorAll('[data-q]').forEach((b) => (b.onclick = async () => { await post('question', { id: b.dataset.q, active: b.dataset.on === '1' }); go('aeo'); }));
+  };
+
+  VIEWS.strategy = async (v) => {
+    const st = await api('strategy');
+    v.innerHTML = `<div class="head"><div><h1>Strategy</h1><p class="soft">What the search brain is working towards. Every suggestion, blog idea, weekly plan and chat answer is weighted towards this, so keep it up to date when your priorities change.${st.updated_at ? ' Last saved ' + ago(st.updated_at) + '.' : ''}</p></div><button class="btn btn--coral" id="save-st">Save strategy</button></div>
+      <div class="grid" style="grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)">
+        <div class="card editor"><label>Your strategy (plain text; headings with ## and bullet points with - work fine)</label><textarea id="st" rows="30" style="font-size:15px;line-height:1.6">${esc(st.value || '')}</textarea></div>
+        <div class="grid" style="align-content:start">
+          <div class="card card--lav"><h3>What helps most</h3><ul class="small" style="margin:0;padding-left:18px"><li>Which customers you want more of, and why</li><li>Categories and products to push, in order</li><li>Products <b>not</b> to push (no stock, not profitable, being phased out)</li><li>Seasonal pushes coming up</li><li>Facts that give you authority (your own data)</li><li>Rules: FCA, brand, pages that must stay as they are</li></ul></div>
+          <div class="card"><h3>When it takes effect</h3><p class="small" style="margin:0">Straight away in the chat. Suggestions, blog ideas and the 3-hour plan pick it up at the next weekly check.</p></div>
+        </div></div>`;
+    $('#save-st').onclick = async () => { await post('save-strategy', { value: $('#st').value }); toast('Strategy saved'); };
   };
 
   VIEWS.results = async (v) => {

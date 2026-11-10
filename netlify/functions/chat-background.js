@@ -1,6 +1,6 @@
 // "Ask Claude" chat: answers Katie's questions from the dashboard's live data (and the web when useful).
 // Runs as a background function; the browser polls for the reply.
-const { db, json, isJobCall, claude, MODEL_MAIN, BRAND_BRIEF } = require('../../lib/shared');
+const { db, json, isJobCall, claude, MODEL_MAIN, BRAND_BRIEF, strategyBrief } = require('../../lib/shared');
 
 const iso = (d) => new Date(d).toISOString().slice(0, 10);
 const addDays = (d, n) => iso(new Date(new Date(d).getTime() + n * 864e5));
@@ -124,7 +124,8 @@ exports.handler = async (event) => {
     const { data: hist } = await db.from('chat_messages').select('role,content,status').eq('thread_id', thread_id).neq('id', reply_id).eq('status', 'done').order('created_at').limit(30);
     const messages = (hist || []).map((m) => ({ role: m.role, content: m.content }));
     const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/London' });
-    const system = `${BRAND_BRIEF}
+    const brief = await strategyBrief();
+    const system = `${brief}
 
 You are the assistant inside Baboodle's "search brain" SEO/AEO dashboard, talking to Katie (co-founder). Today is ${today}. She has about 3 hours a week for SEO and AEO, so be practical and prioritise.
 Answer from the data: call the tools to look things up before answering anything about Baboodle's performance, pages or rankings, and quote the real numbers with their date range. Google Search Console data lags about 2 days. If the data can't answer it, say so plainly rather than guessing. Use web search for things outside Baboodle's data (what ranks now, Google updates, competitor pages).
