@@ -1,6 +1,7 @@
 // Pulls Search Console data day by day into Supabase.
 // First run backfills 90 days; after that it refreshes the last 5 days (GSC data settles over ~3 days).
 const { db, json, toPath, isJobCall, startRun, endRun, gscToken, gscQuery } = require('../../lib/shared');
+const { trafficAlerts, jobFailure } = require('../../lib/alerts');
 
 function iso(d) { return d.toISOString().slice(0, 10); }
 
@@ -54,10 +55,12 @@ exports.handler = async (event) => {
     }
     // keep the query table lean: drop query detail older than 400 days
     await db.from('gsc_query_daily').delete().lt('date', iso(new Date(Date.now() - 400 * 864e5)));
+    await trafficAlerts();
     await endRun(run, 'ok', `Synced ${done} day(s)`);
     return json(200, { ok: true, days: done });
   } catch (e) {
     await endRun(run, 'error', e.message);
+    await jobFailure('Search Console sync', e.message).catch(() => {});
     return json(500, { error: e.message });
   }
 };

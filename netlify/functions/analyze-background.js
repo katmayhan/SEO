@@ -99,10 +99,10 @@ exports.handler = async (event) => {
     const sResp = await claude({
       model: MODEL_MAIN, max_tokens: 8000,
       system: BRAND_BRIEF + '\nYou are Baboodle\'s SEO and AEO strategist. Be specific: name the page, the search, the number. Prioritise by likely extra bookings. Do not repeat open suggestions or suggest undoing recent changes. Note: Search Console has no search-volume data, impressions are your demand signal.',
-      messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 12–20 new suggestions across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect","page_url":"/path or null","priority":"high|medium|low","proposed":{}}]}` }],
+      messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 12–20 new suggestions across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect","page_url":"/path or null","priority":"high|medium|low","effort_minutes":15,"proposed":{}}]}  (effort_minutes = realistic time for Katie to do it herself in Shopify, 5–90)` }],
     });
     const sugs = (parseJSON(claudeText(sResp)).suggestions || []).filter((s) => s.title && s.category);
-    if (sugs.length) await db.from('suggestions').insert(sugs.map((s) => ({ category: s.category, title: s.title, detail: s.detail, page_url: s.page_url || null, priority: s.priority || 'medium', proposed: s.proposed || {} })));
+    if (sugs.length) await db.from('suggestions').insert(sugs.map((s) => ({ category: s.category, title: s.title, detail: s.detail, page_url: s.page_url || null, priority: s.priority || 'medium', effort_minutes: s.effort_minutes || null, proposed: s.proposed || {} })));
 
     // 2) Blog ideas with strategy (live web search to see who ranks now)
     const bResp = await claude({
@@ -131,6 +131,20 @@ exports.handler = async (event) => {
     }
 
     const alts = await altText();
+
+    // 3) This week's plan: fits in Katie's 3 hours
+    const { data: openNow } = await db.from('suggestions').select('id,category,title,detail,page_url,priority,effort_minutes').in('status', ['suggested', 'approved']).neq('category', 'images').order('created_at', { ascending: false }).limit(80);
+    const { count: altCount } = await db.from('suggestions').select('id', { count: 'exact', head: true }).eq('category', 'images').eq('status', 'suggested');
+    const { data: ideas } = await db.from('blog_ideas').select('id,title,status,expected_bookings,target_page').in('status', ['idea', 'draft_ready']).order('expected_bookings', { ascending: false }).limit(8);
+    const { data: openAlerts } = await db.from('alerts').select('id,title,detail,severity').eq('resolved', false).order('created_at', { ascending: false }).limit(10);
+    const pResp = await claude({
+      model: MODEL_MAIN, max_tokens: 3000,
+      system: BRAND_BRIEF + '\nYou plan Katie\'s SEO and AEO week. She has exactly 3 hours (180 minutes) a week. Pick the highest-impact work that fits, in the order she should do it. Fix urgent problems first, then quick wins with the most expected extra bookings, then one bigger piece (usually a blog). Batch small similar jobs (e.g. "25 alt texts, 20 min").',
+      messages: [{ role: 'user', content: `Open alerts: ${JSON.stringify(openAlerts)}\nOpen suggestions (with effort in minutes): ${JSON.stringify(openNow)}\nAlt texts waiting: ${altCount}\nBlog ideas (a blog takes ~60 min to review and publish once drafted; drafting is automatic): ${JSON.stringify(ideas)}\n\nReply as JSON {"summary":"one or two sentences on the focus this week","items":[{"type":"suggestion|blog|alert|alt_text","ref_id":"id or null","title":"","why":"one sentence with the expected effect","minutes":20,"steps":["short step"]}]} with total minutes ≤ 180.` }],
+    });
+    const plan = parseJSON(claudeText(pResp));
+    const monday = new Date(); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+    await db.from('weekly_plans').upsert({ week_of: monday.toISOString().slice(0, 10), budget_minutes: 180, summary: plan.summary || '', items: plan.items || [], emailed_at: null }, { onConflict: 'week_of' });
     await endRun(run, 'ok', `${sugs.length} suggestions, ${blogs.length} blog ideas, ${alts} alt texts, ${measured} results measured`);
     return json(200, { ok: true });
   } catch (e) {

@@ -33,7 +33,15 @@ async function overview() {
   const { count: draftsReady } = await db.from('blog_ideas').select('id', { count: 'exact', head: true }).eq('status', 'draft_ready');
 
   const aeo = await aeoSummary();
-  const out = { connected: !!tok, last_date: last, runs: lastRuns, todo, drafts_ready: draftsReady || 0, aeo: aeo.summary };
+  const { data: plan } = await db.from('weekly_plans').select('*').order('week_of', { ascending: false }).limit(1).maybeSingle();
+  if (plan && plan.items) {
+    const ids = plan.items.filter((i) => i.ref_id && i.type === 'suggestion').map((i) => i.ref_id);
+    const { data: st } = ids.length ? await db.from('suggestions').select('id,status').in('id', ids) : { data: [] };
+    const sm = Object.fromEntries((st || []).map((x) => [x.id, x.status]));
+    plan.items = plan.items.map((i) => ({ ...i, status: sm[i.ref_id] || null }));
+  }
+  const { data: alerts } = await db.from('alerts').select('*').eq('resolved', false).order('created_at', { ascending: false }).limit(10);
+  const out = { connected: !!tok, last_date: last, runs: lastRuns, todo, drafts_ready: draftsReady || 0, aeo: aeo.summary, plan, alerts: alerts || [] };
   if (!last) return out;
 
   const { data: series } = await db.from('gsc_site_daily').select('*').gte('date', addDays(last, -55)).lte('date', last).order('date');
@@ -179,6 +187,7 @@ exports.handler = async (event) => {
         await db.from('changes').insert({ date: body.date || iso(new Date()), page_url: body.page_url || null, description: body.description, source: 'manual' });
         return json(200, { ok: true });
       }
+      if (action === 'resolve-alert') { await db.from('alerts').update({ resolved: true }).eq('id', body.id); return json(200, { ok: true }); }
       if (action === 'delete-change') { await db.from('changes').delete().eq('id', body.id); return json(200, { ok: true }); }
       if (action === 'run') {
         const jobs = { sync: ['gsc-sync-background', {}], backfill: ['gsc-sync-background', { days: 90 }], scan: ['site-scan-background', {}], aeo: ['aeo-check-background', {}], analyze: ['analyze-background', {}], weekly: ['site-scan-background', { chain: true }] };

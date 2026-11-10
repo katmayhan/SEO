@@ -108,7 +108,7 @@
       <div class="item" data-sid="${s.id}">
         <div>${pill(s.priority)}</div>
         <div class="item__main">
-          <div class="item__title">${esc(s.title)}</div>
+          <div class="item__title">${esc(s.title)}${s.effort_minutes ? ` <span class="tiny soft">· ~${esc(s.effort_minutes)} min</span>` : ''}</div>
           <div class="item__meta">${s.page_url ? `<a href="https://baboodle.co.uk${esc(s.page_url)}" target="_blank" rel="noopener">${esc(s.page_url)}</a> · ` : ''}${esc(s.detail || '')}</div>
           ${proposedHTML(s)}
         </div>
@@ -152,6 +152,8 @@
     const todoTotal = Object.values(o.todo || {}).reduce((x, y) => x + y, 0);
     v.innerHTML = `
       <div class="head"><div><h1>How we're doing this week</h1><p class="soft">${day(w.from)} – ${day(w.to)} vs ${day(w.prev_from)} – ${day(w.prev_to)} · Google data lags by about 2 days</p></div></div>
+      ${(o.alerts || []).map((al) => `<div class="notice ${al.severity === 'urgent' ? 'notice--coral' : ''}"><span><b>${esc(al.title)}</b>${al.detail ? ' · ' + esc(al.detail) : ''}</span><button class="btn btn--sm" data-alert="${al.id}">Got it</button></div>`).join('')}
+      ${planHTML(o.plan)}
       <div class="grid g4">
         <div class="card kpi"><div class="label">Clicks from Google</div><div class="num">${n0(w.now.clicks)}</div>${delta(w.now.clicks, w.prev.clicks)}</div>
         <div class="card kpi"><div class="label">Times shown in Google</div><div class="num">${n0(w.now.impressions)}</div>${delta(w.now.impressions, w.prev.impressions)}</div>
@@ -194,10 +196,26 @@
       </tbody></table></div></div>`;
 
     drawChart(o, 'clicks');
+    v.querySelectorAll('[data-alert]').forEach((x) => (x.onclick = async () => { await post('resolve-alert', { id: x.dataset.alert }); x.closest('.notice').remove(); }));
+    v.querySelectorAll('[data-plan-done]').forEach((x) => (x.onclick = async () => { x.disabled = true; await post('suggestion', { id: x.dataset.planDone, status: 'done' }); toast('Done and logged as a change'); go('overview'); }));
     $('#metric').addEventListener('click', (e) => { const b = e.target.closest('[data-m]'); if (!b) return; [...$('#metric').children].forEach((x) => x.classList.toggle('on', x === b)); drawChart(o, b.dataset.m); });
     $('#add-change').onclick = () => { $('#change-form').hidden = !$('#change-form').hidden; };
     $('#change-form').onsubmit = async (e) => { e.preventDefault(); const f = new FormData(e.target); await post('change', Object.fromEntries(f)); toast('Change logged'); go('overview'); };
   };
+
+  function planHTML(plan) {
+    if (!plan || !(plan.items || []).length) return '<div class="card card--lav" style="margin-bottom:14px"><h3>This week\'s 3-hour plan</h3><p style="margin:0">Your first plan arrives after the first weekly check (every Monday morning).</p></div>';
+    const total = plan.items.reduce((a, i) => a + (i.minutes || 0), 0);
+    const doneMin = plan.items.filter((i) => i.status === 'done').reduce((a, i) => a + (i.minutes || 0), 0);
+    const goTab = { blog: 'blogs', alt_text: 'images', alert: 'overview' };
+    return `<div class="card" style="margin-bottom:14px;border:2px solid var(--coral2)">
+      <div class="head" style="margin-bottom:6px"><div><h3>This week's 3-hour plan</h3><p class="soft small" style="margin:4px 0 0">Week of ${day(plan.week_of)} · ${total} minutes planned · ${doneMin} done</p></div></div>
+      ${plan.summary ? `<p style="margin:0 0 6px">${esc(plan.summary)}</p>` : ''}
+      <div class="list">${plan.items.map((i, k) => `<div class="item"><div class="pill ${i.status === 'done' ? 'p-done' : 'p-low'}">${i.status === 'done' ? '✓ ' : ''}${esc(i.minutes)} min</div>
+        <div class="item__main"><div class="item__title">${k + 1}. ${esc(i.title)}</div><div class="item__meta">${esc(i.why || '')}</div>
+        ${(i.steps || []).length ? `<ol class="small" style="margin:6px 0 0;padding-left:18px">${i.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}</div>
+        <div class="item__actions">${i.type === 'suggestion' && i.ref_id && i.status !== 'done' ? `<button class="btn btn--sm btn--coral" data-plan-done="${esc(i.ref_id)}">Mark done</button>` : ''}${goTab[i.type] && goTab[i.type] !== 'overview' ? `<button class="btn btn--sm" data-go="${goTab[i.type]}">Open</button>` : ''}</div></div>`).join('')}</div></div>`;
+  }
 
   function drawChart(o, metric) {
     const s = (o.series || []).slice(-56);

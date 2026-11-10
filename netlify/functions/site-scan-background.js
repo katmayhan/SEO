@@ -2,6 +2,7 @@
 // word counts, structured data, links and image alt text. Writes pages + images + technical issues.
 const cheerio = require('cheerio');
 const { db, SITE, json, toPath, isJobCall, startRun, endRun, trigger } = require('../../lib/shared');
+const { siteAlerts } = require('../../lib/alerts');
 
 const MAX_PAGES = 700;
 const UA = 'BaboodleSearchBrain/1.0 (+https://baboodleseo.netlify.app)';
@@ -148,6 +149,7 @@ exports.handler = async (event) => {
     await db.from('images').delete().neq('src', '');
     for (let k = 0; k < images.length; k += 500) await db.from('images').upsert(images.slice(k, k + 500));
 
+    await siteAlerts();
     await endRun(run, 'ok', `Scanned ${rows.length} pages, ${images.length} images`);
     if (body.chain) await trigger('aeo-check-background', { chain: true });
     return json(200, { ok: true, pages: rows.length });
