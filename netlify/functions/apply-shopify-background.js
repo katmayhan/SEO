@@ -20,6 +20,7 @@ exports.handler = async (event) => {
         const applied = await shop.applySuggestion(s);
         await db.from('suggestions').update({ status: 'done', actioned_at: new Date().toISOString(), applied, applied_at: new Date().toISOString(), apply_error: null }).eq('id', s.id);
         if (s.category !== 'images') await db.from('changes').insert({ date: iso(new Date()), page_url: s.page_url, description: 'Applied in Shopify: ' + s.title, source: 'shopify', suggestion_id: s.id });
+        await db.from('my_week').update({ status: 'done', done_at: new Date().toISOString() }).eq('ref_id', s.id).eq('status', 'todo');
         ok++;
       } catch (e) {
         failed++;

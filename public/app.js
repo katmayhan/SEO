@@ -7,7 +7,7 @@
   const cache = {};
 
   const TABS = [
-    ['overview', 'Overview'], ['keywords', 'Keywords'], ['onpage', 'On-page content'], ['meta', 'Meta titles'],
+    ['overview', 'Overview'], ['week', 'My week'], ['keywords', 'Keywords'], ['onpage', 'On-page content'], ['meta', 'Meta titles'],
     ['technical', 'Technical'], ['images', 'Images and alt text'], ['blogs', 'Blogs'], ['aeo', 'AI mentions'], ['results', 'Results'], ['strategy', 'Strategy'],
   ];
 
@@ -108,6 +108,8 @@
   }
   function copyText(s) { const p = s.proposed || {}; return [p.title, p.description, p.alt, p.copy].filter(Boolean).join('\n\n'); }
 
+  const weekBtn = (o) => `<button class="btn btn--sm" data-addweek="${esc(JSON.stringify(o))}" title="Add to your own weekly list">+ My week</button>`;
+
   function fit(score, note) {
     if (score == null && !note) return '';
     const lbl = score == null ? 'Strategy' : score >= 4 ? 'Strategy fit' : score === 0 ? 'Off strategy' : 'Some fit';
@@ -129,6 +131,7 @@
         <div class="item__actions">
           ${s.status !== 'suggested' ? pill(s.status) : ''}
           ${ask(`Suggestion (${s.category}, ${s.priority} priority${s.page_url ? ', page ' + s.page_url : ''}): "${s.title}". ${s.detail || ''} ${s.proposed && Object.keys(s.proposed).length ? 'Proposed: ' + JSON.stringify(s.proposed) : ''} Talk me through exactly how to do this.`)}
+          ${s.status !== 'done' ? weekBtn({ source: 'suggestion', ref_id: s.id }) : ''}
           ${canApply(s) ? `<button class="btn btn--sm btn--coral" data-act="apply" title="${s.apply_kind === 'copy' ? 'Adds this copy to the end of the page on baboodle.co.uk now' : 'Changes it live on baboodle.co.uk now'}. You can undo it.">${applyLabel(s)}</button>` : ''}
           ${copyText(s) ? '<button class="btn btn--sm" data-act="copy">Copy</button>' : ''}
           ${s.status === 'suggested' && !canApply(s) ? '<button class="btn btn--sm" data-act="approved">Approve</button>' : ''}
@@ -170,6 +173,7 @@
   VIEWS.overview = async (v) => {
     const o = await api('overview');
     cache.todo = o.todo; renderTabs(o.todo); renderStatus(o);
+    setTimeout(async () => { const el = $('#ov-week'); if (!el) return; try { const w = await api('my-week'); el.innerHTML = weekSummary(w); } catch (e) {} }, 0);
     if (!o.connected || !o.last_date) {
       v.innerHTML = `${!o.connected ? `<div class="notice notice--coral"><span><b>Connect Google Search Console</b> to start. Sign in with the Google account that can see baboodle.co.uk in Search Console.</span><a class="btn btn--coral" href="/api/gsc-auth?key=${encodeURIComponent(pass)}">Connect Search Console</a></div>` : '<div class="notice">Search Console is connected. The first 90 days are loading in the background, which takes a few minutes. Refresh shortly.</div>'}
       <div class="empty"><h3>No search data yet</h3><p>Once Search Console is connected the overview fills in automatically every morning.</p></div>`;
@@ -181,7 +185,7 @@
       <div class="head"><div><h1>How we're doing this week</h1><p class="soft">${day(w.from)} – ${day(w.to)} vs ${day(w.prev_from)} – ${day(w.prev_to)} · Google data lags by about 2 days</p></div></div>
       ${Object.values(o.runs || {}).some((r) => /credit balance/i.test(r.message || '')) ? '<div class="notice notice--coral"><span><b>Your Claude API credit has run out.</b> The chat, the AI-mentions check and the weekly analysis are paused until it\'s topped up at console.anthropic.com → Plans &amp; Billing.</span></div>' : ''}
       ${(o.alerts || []).map((al) => `<div class="notice ${al.severity === 'urgent' ? 'notice--coral' : ''}"><span><b>${esc(al.title)}</b>${al.detail ? ' · ' + esc(al.detail) : ''}</span><span style="display:flex;gap:6px;align-items:center">${ask(`Alert: ${al.title}. ${al.detail || ''}`)}<button class="btn btn--sm" data-alert="${al.id}">Got it</button></span></div>`).join('')}
-      ${planHTML(o.plan)}
+      <div id="ov-week"></div>
       <div class="grid g4">
         <div class="card kpi">${ask(`Whole-site Google clicks: ${w.now.clicks} in ${w.from} to ${w.to} vs ${w.prev.clicks} the 7 days before.`)}<div class="label">Clicks from Google</div><div class="num">${n0(w.now.clicks)}</div>${delta(w.now.clicks, w.prev.clicks)}</div>
         <div class="card kpi">${ask(`Whole-site Google impressions: ${w.now.impressions} in ${w.from} to ${w.to} vs ${w.prev.impressions} the 7 days before.`)}<div class="label">Times shown in Google</div><div class="num">${n0(w.now.impressions)}</div>${delta(w.now.impressions, w.prev.impressions)}</div>
@@ -226,7 +230,7 @@
     drawChart(o, 'clicks');
     v.querySelectorAll('[data-alert]').forEach((x) => (x.onclick = async () => { await post('resolve-alert', { id: x.dataset.alert }); x.closest('.notice').remove(); }));
     const rp = v.querySelector('#replan');
-    if (rp) rp.onclick = async () => { rp.disabled = true; rp.textContent = 'Rebuilding…'; try { await post('run', { job: 'plan' }); toast('Rebuilding the plan around your strategy. Refresh in a minute or two.'); } catch (e) { toast(e.message); rp.disabled = false; rp.textContent = 'Rebuild plan'; } };
+    if (rp) rp.onclick = async () => { rp.disabled = true; rp.textContent = 'Rebuilding…'; try { await post('run', { job: 'plan' }); toast('Rebuilding the suggestions. Your own week stays as it is. Refresh in a minute or two.'); } catch (e) { toast(e.message); rp.disabled = false; rp.textContent = 'Rebuild plan'; } };
     v.querySelectorAll('[data-plan-done]').forEach((x) => (x.onclick = async () => { x.disabled = true; await post('suggestion', { id: x.dataset.planDone, status: 'done' }); toast('Done and logged as a change'); go('overview'); }));
     $('#metric').addEventListener('click', (e) => { const b = e.target.closest('[data-m]'); if (!b) return; [...$('#metric').children].forEach((x) => x.classList.toggle('on', x === b)); drawChart(o, b.dataset.m); });
     $('#add-change').onclick = () => { $('#change-form').hidden = !$('#change-form').hidden; };
@@ -239,12 +243,12 @@
     const doneMin = plan.items.filter((i) => i.status === 'done').reduce((a, i) => a + (i.minutes || 0), 0);
     const goTab = { blog: 'blogs', alt_text: 'images', alert: 'overview' };
     return `<div class="card" style="margin-bottom:14px;border:2px solid var(--coral2)">
-      <div class="head" style="margin-bottom:6px"><div><h3>This week's 3-hour plan</h3><p class="soft small" style="margin:4px 0 0">Week of ${day(plan.week_of)} · ${total} minutes planned · ${doneMin} done · built around your Strategy tab</p></div><button class="btn btn--sm" id="replan" title="Rebuild this week's plan from your current strategy (about a minute, costs a few pence)">Rebuild plan</button></div>
+      <div class="head" style="margin-bottom:6px"><div><h3>Suggested for this week</h3><p class="soft small" style="margin:4px 0 0">Built by the weekly check around your Strategy tab, week of ${day(plan.week_of)} · ${total} minutes. Add what you want to do to <b>My week</b>; this list never changes yours.</p></div><button class="btn btn--sm" id="replan" title="Rebuild these suggestions from your current strategy (about a minute, costs a few pence). Your own week isn't touched.">Rebuild suggestions</button></div>
       ${plan.summary ? `<p style="margin:0 0 6px">${esc(plan.summary)}</p>` : ''}
       <div class="list">${plan.items.map((i, k) => `<div class="item"><div class="pill ${i.status === 'done' ? 'p-done' : 'p-low'}">${i.status === 'done' ? '✓ ' : ''}${esc(i.minutes)} min</div>
         <div class="item__main"><div class="item__title">${k + 1}. ${esc(i.title)}</div><div class="item__meta">${esc(i.why || '')}</div>${i.strategy_fit ? `<div style="margin-top:4px"><span class="pill p-done">${esc(i.strategy_fit)}</span></div>` : ''}
         ${(i.steps || []).length ? `<ol class="small" style="margin:6px 0 0;padding-left:18px">${i.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}</div>
-        <div class="item__actions">${ask(`This week's plan item: "${i.title}" (${i.minutes} min). ${i.why || ''} Steps: ${(i.steps || []).join(' / ')}. Walk me through doing this now.`)}${i.type === 'suggestion' && i.ref_id && i.status !== 'done' ? `<button class="btn btn--sm btn--coral" data-plan-done="${esc(i.ref_id)}">Mark done</button>` : ''}${goTab[i.type] && goTab[i.type] !== 'overview' ? `<button class="btn btn--sm" data-go="${goTab[i.type]}">Open</button>` : ''}</div></div>`).join('')}</div></div>`;
+        <div class="item__actions">${weekBtn(i.ref_id && ['suggestion', 'blog'].includes(i.type) ? { source: i.type, ref_id: i.ref_id, minutes: i.minutes, why: i.why, steps: i.steps || [] } : { source: 'plan', title: i.title, why: i.why, steps: i.steps || [], minutes: i.minutes, tab: goTab[i.type] || null })}${ask(`This week's plan item: "${i.title}" (${i.minutes} min). ${i.why || ''} Steps: ${(i.steps || []).join(' / ')}. Walk me through doing this now.`)}${i.type === 'suggestion' && i.ref_id && i.status !== 'done' ? `<button class="btn btn--sm btn--coral" data-plan-done="${esc(i.ref_id)}">Mark done</button>` : ''}${goTab[i.type] && goTab[i.type] !== 'overview' ? `<button class="btn btn--sm" data-go="${goTab[i.type]}">Open</button>` : ''}</div></div>`).join('')}</div></div>`;
   }
 
   function drawChart(o, metric) {
@@ -375,7 +379,7 @@
     const c = b.conversion || {}, cl = b.cluster || {}, o = b.outline || {}, r = b.ranking || {};
     return `<div class="card" style="margin-bottom:12px">
       <div class="head" style="margin:0"><div><h3>${esc(b.title)}</h3><p class="soft small">${n0(b.total_demand)} ${(b.cluster && (b.cluster.queries || []).some((q) => q.monthly_searches != null)) ? 'searches' : 'times shown'} a month · feeds ${esc(b.target_page || '—')} · about <b>${c.bookings != null ? c.bookings : '—'}</b> bookings a month</p>${b.strategy_score != null ? `<p style="margin:4px 0 0">${fit(b.strategy_score, b.strategy_note)}</p>` : ''}</div>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${pill(b.status)}${ask(`Blog idea "${b.title}" (feeds ${b.target_page}, ${b.total_demand} views a month, about ${c.bookings} bookings a month expected, status ${b.status}).`)}<button class="btn btn--sm" data-blog="toggle" data-id="${b.id}">See strategy</button>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${pill(b.status)}${ask(`Blog idea "${b.title}" (feeds ${b.target_page}, ${b.total_demand} views a month, about ${c.bookings} bookings a month expected, status ${b.status}).`)}${b.status !== 'published' ? weekBtn({ source: 'blog', ref_id: b.id }) : ''}<button class="btn btn--sm" data-blog="toggle" data-id="${b.id}">See strategy</button>
         ${b.status === 'idea' ? `<button class="btn btn--sm btn--coral" data-blog="write" data-id="${b.id}">Write draft</button>` : ''}${['draft_ready', 'in_shopify'].includes(b.status) ? `<button class="btn btn--sm btn--coral" data-blog="review" data-id="${b.id}">Review draft</button>` : ''}</div></div>
       <div id="s-${b.id}" hidden>
         <div class="strategy">
@@ -441,6 +445,63 @@
     v.querySelectorAll('[data-q]').forEach((b) => (b.onclick = async () => { await post('question', { id: b.dataset.q, active: b.dataset.on === '1' }); go('aeo'); }));
   };
 
+  function weekSummary(w) {
+    const todo = w.rows.filter((r) => r.status === 'todo'), done = w.rows.filter((r) => r.status === 'done');
+    const plannedMin = todo.reduce((a, r) => a + (r.minutes || 0), 0), doneMin = done.reduce((a, r) => a + (r.minutes || 0), 0);
+    return `<div class="card" style="margin-bottom:14px;border:2px solid var(--coral2)"><div class="head" style="margin-bottom:6px"><div><h3>My week</h3><p class="soft small" style="margin:4px 0 0">${todo.length} to do (${plannedMin} min) · ${done.length} done this week (${doneMin} min) · budget ${w.budget} min</p></div><button class="btn btn--sm btn--coral" data-go="week">Open My week</button></div>
+      ${todo.length ? `<div class="list">${todo.slice(0, 5).map((r, k) => `<div class="item"><div class="pill p-low">${esc(r.minutes || '?')} min</div><div class="item__main"><div class="item__title">${k + 1}. ${esc(r.title)}</div></div></div>`).join('')}</div>${todo.length > 5 ? `<p class="soft small">+ ${todo.length - 5} more</p>` : ''}` : '<p class="soft" style="margin:0">Nothing in your week yet. Open My week and add items from the suggestions, or press "+ My week" on anything in the dashboard.</p>'}</div>`;
+  }
+
+  VIEWS.week = async (v) => {
+    const w = await api('my-week');
+    const todo = w.rows.filter((r) => r.status === 'todo'), done = w.rows.filter((r) => r.status === 'done');
+    const planned = todo.reduce((a, r) => a + (r.minutes || 0), 0), doneMin = done.reduce((a, r) => a + (r.minutes || 0), 0);
+    const pctUsed = Math.min(100, Math.round(((planned + doneMin) / w.budget) * 100));
+    const item = (r, k) => `<div class="item" data-wid="${r.id}">
+        <div><input type="checkbox" class="wk-done" ${r.status === 'done' ? 'checked' : ''} aria-label="Done" title="${r.source === 'suggestion' ? 'Ticking also marks the suggestion done and logs it as a change' : 'Ticking logs it as a change so its effect is measured'}"></div>
+        <div class="item__main"><div class="item__title" style="${r.status === 'done' ? 'text-decoration:line-through;opacity:.6' : ''}">${r.status === 'todo' ? k + 1 + '. ' : ''}${esc(r.title)}</div>
+          ${r.why ? `<div class="item__meta">${esc(r.why)}</div>` : ''}${r.page_url ? `<div class="url">${esc(r.page_url)}</div>` : ''}
+          ${(r.steps || []).length ? `<ol class="small" style="margin:6px 0 0;padding-left:18px">${r.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}</div>
+        <div class="item__actions">
+          <label class="tiny soft" style="display:flex;align-items:center;gap:4px"><input class="wk-min" type="number" min="5" step="5" value="${esc(r.minutes || '')}" style="width:58px"> min</label>
+          ${r.status === 'todo' ? `<button class="btn btn--sm btn--ghost wk-up" title="Move up">↑</button><button class="btn btn--sm btn--ghost wk-down" title="Move down">↓</button>` : ''}
+          ${ask(`My week item: "${r.title}" (${r.minutes || '?'} min)${r.page_url ? ', page ' + r.page_url : ''}. ${r.why || ''} ${(r.steps || []).length ? 'Steps: ' + r.steps.join(' / ') : ''} Walk me through doing this now, and do any of it you can in Shopify for me.`)}
+          ${r.tab ? `<button class="btn btn--sm" data-go="${esc(r.tab)}">Open</button>` : ''}
+          <button class="btn btn--sm btn--ghost wk-rm" title="Remove from my week">Remove</button>
+        </div></div>`;
+    v.innerHTML = `<div class="head"><div><h1>My week</h1><p class="soft">Your own SEO list for the week. It only changes when you change it. Add things with "+ My week" anywhere in the dashboard, from the suggestions below, or type your own. Unfinished items roll over.</p></div></div>
+      <div class="card"><div class="head" style="margin-bottom:8px"><h3>${planned} min to do · ${doneMin} min done · ${w.budget} min budget</h3></div>
+        <div style="height:10px;border-radius:6px;background:var(--sand);overflow:hidden"><div style="height:100%;width:${pctUsed}%;background:${planned + doneMin > w.budget ? 'var(--red)' : 'var(--coral)'}"></div></div>
+        ${planned + doneMin > w.budget ? `<p class="small" style="color:var(--red);margin:6px 0 0">That's ${planned + doneMin - w.budget} minutes over your 3 hours.</p>` : ''}
+        <div class="list" id="wk-todo" style="margin-top:10px">${todo.map(item).join('') || '<p class="soft">Nothing to do yet.</p>'}</div>
+        <form id="wk-add" class="filters" style="margin-top:12px"><input name="title" placeholder="Add your own task, e.g. Update London page hero text" required style="flex:1"><input name="minutes" type="number" min="5" step="5" placeholder="min" style="width:80px"><button class="btn btn--coral btn--sm" type="submit">Add</button></form>
+      </div>
+      ${done.length ? `<div class="section card"><h3>Done this week</h3><div class="list" id="wk-done">${done.map(item).join('')}</div></div>` : ''}
+      <div class="section" id="wk-sugg">${planHTML(w.suggested)}</div>`;
+    const ids = todo.map((r) => r.id);
+    v.addEventListener('change', async (e) => {
+      const it = e.target.closest('[data-wid]'); if (!it) return;
+      try {
+        if (e.target.classList.contains('wk-done')) { await post('my-week-update', { id: it.dataset.wid, status: e.target.checked ? 'done' : 'todo' }); toast(e.target.checked ? 'Done, and logged so its effect is measured' : 'Back on your list'); go('week'); }
+        if (e.target.classList.contains('wk-min')) { await post('my-week-update', { id: it.dataset.wid, minutes: Number(e.target.value) || null }); go('week'); }
+      } catch (err) { toast(err.message); }
+    });
+    v.addEventListener('click', async (e) => {
+      const it = e.target.closest('[data-wid]'); if (!it) return;
+      const i = ids.indexOf(it.dataset.wid);
+      try {
+        if (e.target.classList.contains('wk-rm')) { await post('my-week-remove', { id: it.dataset.wid }); go('week'); }
+        if ((e.target.classList.contains('wk-up') && i > 0) || (e.target.classList.contains('wk-down') && i < ids.length - 1)) {
+          const j = e.target.classList.contains('wk-up') ? i - 1 : i + 1; [ids[i], ids[j]] = [ids[j], ids[i]];
+          await post('my-week-order', { ids }); go('week');
+        }
+      } catch (err) { toast(err.message); }
+    });
+    $('#wk-add').onsubmit = async (e) => { e.preventDefault(); const f = new FormData(e.target); try { await post('my-week-add', { source: 'custom', title: f.get('title'), minutes: Number(f.get('minutes')) || null }); go('week'); } catch (err) { toast(err.message); } };
+    const rp = v.querySelector('#replan');
+    if (rp) rp.onclick = async () => { rp.disabled = true; rp.textContent = 'Rebuilding…'; try { await post('run', { job: 'plan' }); toast('Rebuilding the suggestions. Your own week stays as it is. Refresh in a minute or two.'); } catch (err) { toast(err.message); rp.disabled = false; rp.textContent = 'Rebuild suggestions'; } };
+  };
+
   VIEWS.strategy = async (v) => {
     const st = await api('strategy');
     v.innerHTML = `<div class="head"><div><h1>Strategy</h1><p class="soft">What the search brain is working towards. Every suggestion, blog idea, weekly plan and chat answer is weighted towards this, so keep it up to date when your priorities change.${st.updated_at ? ' Last saved ' + ago(st.updated_at) + '.' : ''}</p></div><button class="btn btn--coral" id="save-st">Save strategy</button></div>
@@ -448,9 +509,9 @@
         <div class="card editor"><label>Your strategy (plain text; headings with ## and bullet points with - work fine)</label><textarea id="st" rows="30" style="font-size:15px;line-height:1.6">${esc(st.value || '')}</textarea></div>
         <div class="grid" style="align-content:start">
           <div class="card card--lav"><h3>What helps most</h3><ul class="small" style="margin:0;padding-left:18px"><li>Which customers you want more of, and why</li><li>Categories and products to push, in order</li><li>Products <b>not</b> to push (no stock, not profitable, being phased out)</li><li>Seasonal pushes coming up</li><li>Facts that give you authority (your own data)</li><li>Rules: FCA, brand, pages that must stay as they are</li></ul></div>
-          <div class="card"><h3>When it takes effect</h3><p class="small" style="margin:0">Straight away in the chat. When you save, every open blog idea and suggestion is re-scored against it and this week's 3-hour plan is rebuilt (takes a minute or two). New suggestions and blog ideas follow it from the next weekly check.</p></div>
+          <div class="card"><h3>When it takes effect</h3><p class="small" style="margin:0">Straight away in the chat. When you save, every open blog idea and suggestion is re-scored against it. Your own week is never changed; the suggested plan is rebuilt on Mondays, or when you press Rebuild suggestions. New suggestions and blog ideas follow it from the next weekly check.</p></div>
         </div></div>`;
-    $('#save-st').onclick = async () => { await post('save-strategy', { value: $('#st').value }); toast('Strategy saved. Re-scoring ideas and rebuilding this week\'s plan around it, give it a minute or two.'); };
+    $('#save-st').onclick = async () => { await post('save-strategy', { value: $('#st').value }); toast('Strategy saved. Ideas are re-scored against it; press "Rebuild suggestions" on My week if you want fresh weekly suggestions now.'); };
   };
 
   VIEWS.results = async (v) => {
@@ -462,6 +523,17 @@
   };
 
   document.addEventListener('click', (e) => { const b = e.target.closest('[data-go]'); if (b) go(b.dataset.go); });
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-addweek]');
+    if (!b) return;
+    e.preventDefault(); e.stopPropagation();
+    b.disabled = true;
+    try {
+      const r = await post('my-week-add', JSON.parse(b.dataset.addweek));
+      b.textContent = '✓ In my week'; b.classList.add('btn--ghost');
+      toast(r.already ? 'Already in your week' : 'Added to My week');
+    } catch (err) { toast(err.message); b.disabled = false; }
+  }, true);
 
   // ---------- Ask Claude ----------
   const STARTERS = ['How are we doing this week compared with last week?', 'What should I spend my 3 hours on this week?', 'Which searches could reach the top 3 with a small change?', 'Has the pram hire hub redesign helped yet?', 'Why aren\'t we mentioned by AI for travel pram questions?'];

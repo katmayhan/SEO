@@ -147,6 +147,39 @@ async function sendToShopify(id) {
   return r.article;
 }
 
+// ---------- My week: Katie's own, stable list ----------
+const TAB_FOR = { keywords: 'keywords', onpage: 'onpage', meta: 'meta', technical: 'technical', images: 'images', aeo: 'aeo' };
+async function myWeek() {
+  const since = new Date(Date.now() - 7 * 864e5).toISOString();
+  const { data } = await db.from('my_week').select('*').or(`status.eq.todo,done_at.gte.${since}`).order('position').order('added_at');
+  const { data: plan } = await db.from('weekly_plans').select('*').order('week_of', { ascending: false }).limit(1).maybeSingle();
+  return { rows: data || [], suggested: plan || null, budget: 180 };
+}
+async function myWeekAdd(b) {
+  let item = { source: b.source || 'custom', ref_id: b.ref_id || null, title: b.title, why: b.why || null, steps: b.steps || [], minutes: b.minutes || null, page_url: b.page_url || null, tab: b.tab || null };
+  if (item.ref_id) {
+    const { data: dupe } = await db.from('my_week').select('id').eq('ref_id', item.ref_id).eq('status', 'todo').limit(1);
+    if (dupe && dupe.length) return { ok: true, id: dupe[0].id, already: true };
+    if (item.source === 'suggestion') {
+      const { data: s } = await db.from('suggestions').select('*').eq('id', item.ref_id).maybeSingle();
+      if (s) item = { ...item, title: item.title || s.title, why: item.why || s.detail, minutes: item.minutes || s.effort_minutes, page_url: item.page_url || s.page_url, tab: item.tab || TAB_FOR[s.category] };
+    }
+    if (item.source === 'blog') {
+      const { data: bl } = await db.from('blog_ideas').select('title,target_page').eq('id', item.ref_id).maybeSingle();
+      if (bl) item = { ...item, title: item.title || 'Blog: ' + bl.title, minutes: item.minutes || 60, page_url: item.page_url || bl.target_page, tab: 'blogs' };
+    }
+  }
+  if (!item.title) throw new Error('Needs a title');
+  const { data: last } = await db.from('my_week').select('position').order('position', { ascending: false }).limit(1).maybeSingle();
+  item.position = ((last && last.position) || 0) + 1;
+  const { data, error } = await db.from('my_week').insert(item).select('id').single();
+  if (error) throw new Error(error.message);
+  return { ok: true, id: data.id };
+}
+async function markRefDone(refId) {
+  if (refId) await db.from('my_week').update({ status: 'done', done_at: new Date().toISOString() }).eq('ref_id', refId).eq('status', 'todo');
+}
+
 exports.handler = async (event) => {
   const key = event.headers['x-dash-key'];
   if (!process.env.DASHBOARD_PASSWORD || key !== process.env.DASHBOARD_PASSWORD) return json(401, { error: 'Wrong password' });
@@ -159,6 +192,7 @@ exports.handler = async (event) => {
     if (event.httpMethod === 'GET') {
       if (action === 'overview') return json(200, await overview());
       if (action === 'shopify-status') return json(200, await shop.status());
+      if (action === 'my-week') return json(200, await myWeek());
       if (action === 'keywords') return json(200, await keywords());
       if (action === 'pages') return json(200, await pagesData());
       if (action === 'aeo') return json(200, await aeoSummary());
@@ -198,6 +232,7 @@ exports.handler = async (event) => {
         if (body.proposed) patch.proposed = body.proposed;
         if (body.status === 'done') patch.actioned_at = new Date().toISOString();
         const { data: s } = await db.from('suggestions').update(patch).eq('id', body.id).select().single();
+        if (body.status === 'done' && s) await markRefDone(s.id);
         if (body.status === 'done' && s && s.category !== 'images') {
           await db.from('changes').insert({ date: iso(new Date()), page_url: s.page_url, description: s.title, source: 'suggestion', suggestion_id: s.id });
         }
@@ -212,9 +247,8 @@ exports.handler = async (event) => {
         // re-score ideas and open tasks against the new strategy and rebuild this week's plan
         await db.from('blog_ideas').update({ strategy_score: null, strategy_note: null }).in('status', ['idea', 'draft_ready']);
         await db.from('suggestions').update({ strategy_score: null, strategy_note: null }).in('status', ['suggested', 'approved']).neq('category', 'images');
-        const { data: busyA } = await db.from('runs').select('id').eq('job', 'analyze').eq('status', 'running').gte('started_at', new Date(Date.now() - 20 * 60000).toISOString()).limit(1);
-        if (!(busyA && busyA.length)) await trigger('analyze-background', { only: 'plan' });
-        return json(200, { ok: true, replanning: true });
+        // the suggested plan is only rebuilt on Mondays or when Katie presses "Rebuild suggestions"; her own week is never touched
+        return json(200, { ok: true });
       }
       if (action === 'chat-send') {
         const text = String(body.text || '').slice(0, 4000).trim();
@@ -244,6 +278,26 @@ exports.handler = async (event) => {
         await db.from('blog_ideas').update(patch).eq('id', body.id);
         return json(200, { ok: true });
       }
+      if (action === 'my-week-add') return json(200, await myWeekAdd(body));
+      if (action === 'my-week-remove') { await db.from('my_week').delete().eq('id', body.id); return json(200, { ok: true }); }
+      if (action === 'my-week-order') { for (let i = 0; i < (body.ids || []).length; i++) await db.from('my_week').update({ position: i + 1 }).eq('id', body.ids[i]); return json(200, { ok: true }); }
+      if (action === 'my-week-update') {
+        const patch = {};
+        ['title', 'minutes', 'why'].forEach((k) => { if (body[k] !== undefined) patch[k] = body[k]; });
+        if (body.status) { patch.status = body.status; patch.done_at = body.status === 'done' ? new Date().toISOString() : null; }
+        const { data: it } = await db.from('my_week').update(patch).eq('id', body.id).select('*').single();
+        // ticking off a suggestion also marks it done (and logs it as a change so the result is measured)
+        if (body.status === 'done' && it && it.source === 'suggestion' && it.ref_id) {
+          const { data: s } = await db.from('suggestions').select('*').eq('id', it.ref_id).maybeSingle();
+          if (s && s.status !== 'done') {
+            await db.from('suggestions').update({ status: 'done', actioned_at: new Date().toISOString() }).eq('id', s.id);
+            if (s.category !== 'images') await db.from('changes').insert({ date: iso(new Date()), page_url: s.page_url, description: s.title, source: 'suggestion', suggestion_id: s.id });
+          }
+        } else if (body.status === 'done' && it && ['custom', 'plan', 'chat'].includes(it.source) && body.log !== false) {
+          await db.from('changes').insert({ date: iso(new Date()), page_url: it.page_url || null, description: it.title, source: 'manual' });
+        }
+        return json(200, { ok: true });
+      }
       if (action === 'apply') {
         const { data: s } = await db.from('suggestions').select('*').eq('id', body.id).single();
         if (!s) return json(404, { error: 'Suggestion not found' });
@@ -253,6 +307,7 @@ exports.handler = async (event) => {
           const applied = await shop.applySuggestion(s);
           await db.from('suggestions').update({ status: 'done', actioned_at: new Date().toISOString(), applied, applied_at: new Date().toISOString(), apply_error: null }).eq('id', s.id);
           if (s.category !== 'images') await db.from('changes').insert({ date: iso(new Date()), page_url: s.page_url, description: 'Applied in Shopify: ' + s.title, source: 'shopify', suggestion_id: s.id });
+          await markRefDone(s.id);
           return json(200, { ok: true, applied });
         } catch (e) {
           await db.from('suggestions').update({ apply_error: e.message.slice(0, 300) }).eq('id', s.id);
