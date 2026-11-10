@@ -38,6 +38,16 @@ async function buildPlan() {
   const blocked = new Set([...(openNow || []), ...(ideas || [])].filter((x) => x.strategy_score === 0).map((x) => x.id));
   const okSugs = (openNow || []).filter((x) => !blocked.has(x.id));
   const okIdeas = (ideas || []).filter((x) => !blocked.has(x.id)).sort((a, b) => (b.strategy_score || 0) - (a.strategy_score || 0) || (b.expected_bookings || 0) - (a.expected_bookings || 0));
+  // pages already earning traffic: protect and grow the ones the strategy cares about
+  let topPages = [];
+  try {
+    const { data: lastDay } = await db.from('gsc_site_daily').select('date').order('date', { ascending: false }).limit(1).maybeSingle();
+    if (lastDay) {
+      const to = lastDay.date, from = new Date(new Date(to) - 27 * 864e5).toISOString().slice(0, 10);
+      const { data: pw } = await db.rpc('page_window', { d_from: from, d_to: to });
+      topPages = (pw || []).map((r) => ({ page: r.page, clicks_28d: Number(r.clicks), shown_28d: Number(r.impressions), position: Number(r.pos) })).sort((a, b) => b.clicks_28d - a.clicks_28d).slice(0, 15);
+    }
+  } catch (e) {}
   const plan = await claudeJSON({
     model: MODEL_MAIN, max_tokens: 4000, schema: PLAN_SCHEMA,
     system: BRAND_BRIEF + `\nYou plan Katie's SEO and AEO week. She has exactly 3 hours (180 minutes). The plan must move Baboodle's long-term strategy above, not just chase this month's traffic.
@@ -46,10 +56,12 @@ Rules, in order:
 2. Spend at least two thirds of the time (120+ minutes) on work with strategy score 4–5. Strategy score beats expected bookings: "expected bookings" is worked out from searches where Baboodle already shows up, so it badly undercounts new priority areas (e.g. newborn, doubles, running) where Baboodle isn't visible yet. Recurring rental customers are worth far more than one-off hires.
 3. Never include anything the strategy says not to push, even if its numbers are big.
 4. If the options below don't cover a top priority well, add your own item (type "strategy", ref_id null) taken from the strategy's "content we want" or priority list, e.g. starting a data-led guide or improving a priority collection page, with concrete steps.
-5. Fill leftover time with quick wins (alt text batches, meta fixes) on priority pages first. Batch small similar jobs.
-6. Spread across at least two priorities where sensible, and keep one bigger piece at most (a blog takes ~60 min to review and publish once drafted; drafting is automatic).
+5. Look at the top pages by clicks. Any page the strategy names or that serves a priority (e.g. a location or category page) and already sits at position 4–10 with lots of impressions is the fastest win available: moving it into the top 3 roughly doubles its clicks. Include at least one item that protects or grows such a page if there is one, even if no open suggestion covers it (add your own "strategy" item with concrete steps). Never spend time on pages for products the strategy says not to push, however much traffic they get.
+6. Every focus area the strategy names should be covered over the course of a month; if one has had nothing recently, give it time this week.
+7. Fill leftover time with quick wins (alt text batches, meta fixes) on priority pages first. Batch small similar jobs.
+8. Spread across at least two priorities where sensible, and keep one bigger piece at most (a blog takes ~60 min to review and publish once drafted; drafting is automatic).
 For every item, strategy_fit names the priority it serves in a few words (e.g. "Priority 1: double prams").`,
-    messages: [{ role: 'user', content: `Open alerts: ${JSON.stringify(openAlerts)}\nOpen suggestions (effort in minutes, strategy_score 0–5): ${JSON.stringify(okSugs)}\nAlt texts waiting: ${altCount}\nBlog ideas (sorted by strategy score): ${JSON.stringify(okIdeas)}\n\nReply as JSON {"summary":"one or two sentences on this week's focus and which strategy priorities it moves","items":[{"type":"suggestion|blog|alert|alt_text|strategy","ref_id":"id or null","title":"","why":"one sentence with the expected effect","strategy_fit":"","minutes":20,"steps":["short step"]}]} with total minutes ≤ 180.` }],
+    messages: [{ role: 'user', content: `Open alerts: ${JSON.stringify(openAlerts)}\nOpen suggestions (effort in minutes, strategy_score 0–5): ${JSON.stringify(okSugs)}\nAlt texts waiting: ${altCount}\nTop pages by clicks (last 28 days): ${JSON.stringify(topPages)}\nBlog ideas (sorted by strategy score): ${JSON.stringify(okIdeas)}\n\nReply as JSON {"summary":"one or two sentences on this week's focus and which strategy priorities it moves","items":[{"type":"suggestion|blog|alert|alt_text|strategy","ref_id":"id or null","title":"","why":"one sentence with the expected effect","strategy_fit":"","minutes":20,"steps":["short step"]}]} with total minutes ≤ 180.` }],
   });
   const items = (plan.items || []).filter((i) => !(i.ref_id && blocked.has(i.ref_id)));
   const monday = new Date(); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
@@ -176,7 +188,7 @@ exports.handler = async (event) => {
     try {
     const sOut = await claudeJSON({
       model: MODEL_MAIN, max_tokens: 16000, schema: SUG_SCHEMA,
-      system: BRAND_BRIEF + '\nYou are Baboodle\'s SEO and AEO strategist. Be specific: name the page, the search, the number. Prioritise by how much it moves Baboodle\'s strategy (long-term customers and the priority categories) and likely extra bookings. Do not repeat open suggestions or suggest undoing recent changes. ' + (volNote ? 'Note:' + volNote + ' Use demand_where_baboodle_is_not_on_page_1 to spot on-strategy searches with real demand that Baboodle is missing, and say which page should win each.' : 'Note: Search Console has no search-volume data, impressions are your demand signal.'),
+      system: BRAND_BRIEF + '\nYou are Baboodle\'s SEO and AEO strategist. Be specific: name the page, the search, the number. Prioritise by how much it moves Baboodle\'s strategy (long-term customers and the priority categories) and likely extra bookings. Do not repeat open suggestions or suggest undoing recent changes. Cover every focus area the strategy names (categories, products and locations such as London), and look hard at strategy pages that already earn clicks but sit at position 4–10: lifting those into the top 3 is usually the quickest win. Never work on pages for products the strategy says not to push, however much traffic they get. ' + (volNote ? 'Note:' + volNote + ' Use demand_where_baboodle_is_not_on_page_1 to spot on-strategy searches with real demand that Baboodle is missing, and say which page should win each.' : 'Note: Search Console has no search-volume data, impressions are your demand signal.'),
       messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 10–15 new suggestions (keep each detail under 60 words and copy under 120 words) across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect, and which part of the strategy it serves","page_url":"/path or null","priority":"high|medium|low","effort_minutes":15,"strategy_score":4,"strategy_note":"priority it serves","proposed":{}}]}  (effort_minutes = realistic time for Katie to do it herself in Shopify, 5–90). ${SCORE_GUIDE} At least two thirds of suggestions should score 4–5. Do not suggest anything that would score 0.` }],
     });
     sugs = (sOut.suggestions || []).filter((s) => s.title && s.category);
