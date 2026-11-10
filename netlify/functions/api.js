@@ -159,7 +159,7 @@ exports.handler = async (event) => {
         return json(200, { rows: data || [] });
       }
       if (action === 'blogs') {
-        const { data } = await db.from('blog_ideas').select('id,title,target_page,status,total_demand,expected_bookings,intent,cluster,outline,ranking,conversion,meta_title,meta_description,checks,created_at').order('expected_bookings', { ascending: false, nullsFirst: false });
+        const { data } = await db.from('blog_ideas').select('id,title,target_page,status,total_demand,expected_bookings,intent,cluster,outline,ranking,conversion,meta_title,meta_description,checks,created_at,strategy_score,strategy_note').order('strategy_score', { ascending: false, nullsFirst: false }).order('expected_bookings', { ascending: false, nullsFirst: false });
         return json(200, { rows: data || [] });
       }
       if (action === 'blog') {
@@ -197,7 +197,12 @@ exports.handler = async (event) => {
       }
       if (action === 'save-strategy') {
         await db.from('settings').upsert({ key: 'strategy', value: String(body.value || '').slice(0, 20000), updated_at: new Date().toISOString() });
-        return json(200, { ok: true });
+        // re-score ideas and open tasks against the new strategy and rebuild this week's plan
+        await db.from('blog_ideas').update({ strategy_score: null, strategy_note: null }).in('status', ['idea', 'draft_ready']);
+        await db.from('suggestions').update({ strategy_score: null, strategy_note: null }).in('status', ['suggested', 'approved']).neq('category', 'images');
+        const { data: busyA } = await db.from('runs').select('id').eq('job', 'analyze').eq('status', 'running').gte('started_at', new Date(Date.now() - 20 * 60000).toISOString()).limit(1);
+        if (!(busyA && busyA.length)) await trigger('analyze-background', { only: 'plan' });
+        return json(200, { ok: true, replanning: true });
       }
       if (action === 'chat-send') {
         const text = String(body.text || '').slice(0, 4000).trim();
@@ -210,7 +215,7 @@ exports.handler = async (event) => {
       if (action === 'resolve-alert') { await db.from('alerts').update({ resolved: true }).eq('id', body.id); return json(200, { ok: true }); }
       if (action === 'delete-change') { await db.from('changes').delete().eq('id', body.id); return json(200, { ok: true }); }
       if (action === 'run') {
-        const jobs = { sync: ['gsc-sync-background', {}], backfill: ['gsc-sync-background', { days: 90 }], scan: ['site-scan-background', {}], aeo: ['aeo-check-background', {}], analyze: ['analyze-background', {}], weekly: ['site-scan-background', { chain: true }] };
+        const jobs = { sync: ['gsc-sync-background', {}], backfill: ['gsc-sync-background', { days: 90 }], scan: ['site-scan-background', {}], aeo: ['aeo-check-background', {}], analyze: ['analyze-background', {}], plan: ['analyze-background', { only: 'plan' }], weekly: ['site-scan-background', { chain: true }] };
         const j = jobs[body.job];
         if (!j) return json(400, { error: 'Unknown job' });
         const busyJobs = body.job === 'weekly' ? ['site-scan', 'aeo-check', 'analyze'] : [j[0].replace('-background', '')];

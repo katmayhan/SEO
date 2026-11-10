@@ -105,6 +105,13 @@
   }
   function copyText(s) { const p = s.proposed || {}; return [p.title, p.description, p.alt, p.copy].filter(Boolean).join('\n\n'); }
 
+  function fit(score, note) {
+    if (score == null && !note) return '';
+    const lbl = score == null ? 'Strategy' : score >= 4 ? 'Strategy fit' : score === 0 ? 'Off strategy' : 'Some fit';
+    const cls = score == null ? 'p-low' : score >= 4 ? 'p-done' : score === 0 ? 'p-high' : 'p-low';
+    return `<span class="pill ${cls}" title="${esc(note || '')}">${lbl}${score != null ? ' ' + score + '/5' : ''}</span>${note ? ` <span class="soft small">${esc(note)}</span>` : ''}`;
+  }
+
   function suggestionList(rows, emptyMsg) {
     if (!rows.length) return `<div class="empty"><h3>Nothing waiting here</h3><p>${esc(emptyMsg)}</p></div>`;
     return `<div class="list">${rows.map((s) => `
@@ -112,7 +119,7 @@
         <div>${pill(s.priority)}</div>
         <div class="item__main">
           <div class="item__title">${esc(s.title)}${s.effort_minutes ? ` <span class="tiny soft">· ~${esc(s.effort_minutes)} min</span>` : ''}</div>
-          <div class="item__meta">${s.page_url ? `<a href="https://baboodle.co.uk${esc(s.page_url)}" target="_blank" rel="noopener">${esc(s.page_url)}</a> · ` : ''}${esc(s.detail || '')}</div>
+          <div class="item__meta">${s.page_url ? `<a href="https://baboodle.co.uk${esc(s.page_url)}" target="_blank" rel="noopener">${esc(s.page_url)}</a> · ` : ''}${esc(s.detail || '')}</div>${s.strategy_score != null ? `<div style="margin-top:4px">${fit(s.strategy_score, s.strategy_note)}</div>` : ''}
           ${proposedHTML(s)}
         </div>
         <div class="item__actions">
@@ -202,6 +209,8 @@
 
     drawChart(o, 'clicks');
     v.querySelectorAll('[data-alert]').forEach((x) => (x.onclick = async () => { await post('resolve-alert', { id: x.dataset.alert }); x.closest('.notice').remove(); }));
+    const rp = v.querySelector('#replan');
+    if (rp) rp.onclick = async () => { rp.disabled = true; rp.textContent = 'Rebuilding…'; try { await post('run', { job: 'plan' }); toast('Rebuilding the plan around your strategy. Refresh in a minute or two.'); } catch (e) { toast(e.message); rp.disabled = false; rp.textContent = 'Rebuild plan'; } };
     v.querySelectorAll('[data-plan-done]').forEach((x) => (x.onclick = async () => { x.disabled = true; await post('suggestion', { id: x.dataset.planDone, status: 'done' }); toast('Done and logged as a change'); go('overview'); }));
     $('#metric').addEventListener('click', (e) => { const b = e.target.closest('[data-m]'); if (!b) return; [...$('#metric').children].forEach((x) => x.classList.toggle('on', x === b)); drawChart(o, b.dataset.m); });
     $('#add-change').onclick = () => { $('#change-form').hidden = !$('#change-form').hidden; };
@@ -214,10 +223,10 @@
     const doneMin = plan.items.filter((i) => i.status === 'done').reduce((a, i) => a + (i.minutes || 0), 0);
     const goTab = { blog: 'blogs', alt_text: 'images', alert: 'overview' };
     return `<div class="card" style="margin-bottom:14px;border:2px solid var(--coral2)">
-      <div class="head" style="margin-bottom:6px"><div><h3>This week's 3-hour plan</h3><p class="soft small" style="margin:4px 0 0">Week of ${day(plan.week_of)} · ${total} minutes planned · ${doneMin} done</p></div></div>
+      <div class="head" style="margin-bottom:6px"><div><h3>This week's 3-hour plan</h3><p class="soft small" style="margin:4px 0 0">Week of ${day(plan.week_of)} · ${total} minutes planned · ${doneMin} done · built around your Strategy tab</p></div><button class="btn btn--sm" id="replan" title="Rebuild this week's plan from your current strategy (about a minute, costs a few pence)">Rebuild plan</button></div>
       ${plan.summary ? `<p style="margin:0 0 6px">${esc(plan.summary)}</p>` : ''}
       <div class="list">${plan.items.map((i, k) => `<div class="item"><div class="pill ${i.status === 'done' ? 'p-done' : 'p-low'}">${i.status === 'done' ? '✓ ' : ''}${esc(i.minutes)} min</div>
-        <div class="item__main"><div class="item__title">${k + 1}. ${esc(i.title)}</div><div class="item__meta">${esc(i.why || '')}</div>
+        <div class="item__main"><div class="item__title">${k + 1}. ${esc(i.title)}</div><div class="item__meta">${esc(i.why || '')}</div>${i.strategy_fit ? `<div style="margin-top:4px"><span class="pill p-done">${esc(i.strategy_fit)}</span></div>` : ''}
         ${(i.steps || []).length ? `<ol class="small" style="margin:6px 0 0;padding-left:18px">${i.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}</div>
         <div class="item__actions">${ask(`This week's plan item: "${i.title}" (${i.minutes} min). ${i.why || ''} Steps: ${(i.steps || []).join(' / ')}. Walk me through doing this now.`)}${i.type === 'suggestion' && i.ref_id && i.status !== 'done' ? `<button class="btn btn--sm btn--coral" data-plan-done="${esc(i.ref_id)}">Mark done</button>` : ''}${goTab[i.type] && goTab[i.type] !== 'overview' ? `<button class="btn btn--sm" data-go="${goTab[i.type]}">Open</button>` : ''}</div></div>`).join('')}</div></div>`;
   }
@@ -320,7 +329,7 @@
   function blogCard(b) {
     const c = b.conversion || {}, cl = b.cluster || {}, o = b.outline || {}, r = b.ranking || {};
     return `<div class="card" style="margin-bottom:12px">
-      <div class="head" style="margin:0"><div><h3>${esc(b.title)}</h3><p class="soft small">${n0(b.total_demand)} times shown a month · feeds ${esc(b.target_page || '—')} · about <b>${c.bookings != null ? c.bookings : '—'}</b> bookings a month</p></div>
+      <div class="head" style="margin:0"><div><h3>${esc(b.title)}</h3><p class="soft small">${n0(b.total_demand)} times shown a month · feeds ${esc(b.target_page || '—')} · about <b>${c.bookings != null ? c.bookings : '—'}</b> bookings a month</p>${b.strategy_score != null ? `<p style="margin:4px 0 0">${fit(b.strategy_score, b.strategy_note)}</p>` : ''}</div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${pill(b.status)}${ask(`Blog idea "${b.title}" (feeds ${b.target_page}, ${b.total_demand} views a month, about ${c.bookings} bookings a month expected, status ${b.status}).`)}<button class="btn btn--sm" data-blog="toggle" data-id="${b.id}">See strategy</button>
         ${b.status === 'idea' ? `<button class="btn btn--sm btn--coral" data-blog="write" data-id="${b.id}">Write draft</button>` : ''}${['draft_ready', 'in_shopify'].includes(b.status) ? `<button class="btn btn--sm btn--coral" data-blog="review" data-id="${b.id}">Review draft</button>` : ''}</div></div>
       <div id="s-${b.id}" hidden>
@@ -394,9 +403,9 @@
         <div class="card editor"><label>Your strategy (plain text; headings with ## and bullet points with - work fine)</label><textarea id="st" rows="30" style="font-size:15px;line-height:1.6">${esc(st.value || '')}</textarea></div>
         <div class="grid" style="align-content:start">
           <div class="card card--lav"><h3>What helps most</h3><ul class="small" style="margin:0;padding-left:18px"><li>Which customers you want more of, and why</li><li>Categories and products to push, in order</li><li>Products <b>not</b> to push (no stock, not profitable, being phased out)</li><li>Seasonal pushes coming up</li><li>Facts that give you authority (your own data)</li><li>Rules: FCA, brand, pages that must stay as they are</li></ul></div>
-          <div class="card"><h3>When it takes effect</h3><p class="small" style="margin:0">Straight away in the chat. Suggestions, blog ideas and the 3-hour plan pick it up at the next weekly check.</p></div>
+          <div class="card"><h3>When it takes effect</h3><p class="small" style="margin:0">Straight away in the chat. When you save, every open blog idea and suggestion is re-scored against it and this week's 3-hour plan is rebuilt (takes a minute or two). New suggestions and blog ideas follow it from the next weekly check.</p></div>
         </div></div>`;
-    $('#save-st').onclick = async () => { await post('save-strategy', { value: $('#st').value }); toast('Strategy saved'); };
+    $('#save-st').onclick = async () => { await post('save-strategy', { value: $('#st').value }); toast('Strategy saved. Re-scoring ideas and rebuilding this week\'s plan around it, give it a minute or two.'); };
   };
 
   VIEWS.results = async (v) => {

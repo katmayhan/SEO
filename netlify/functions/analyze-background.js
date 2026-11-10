@@ -3,9 +3,58 @@
 const { db, json, isJobCall, startRun, endRun, claude, claudeJSON, claudeText, parseJSON, MODEL_MAIN, MODEL_FAST, BRAND_BRIEF: BASE_BRIEF, strategyBrief } = require('../../lib/shared');
 let BRAND_BRIEF = BASE_BRIEF;
 
-const SUG_SCHEMA = { type: 'object', properties: { suggestions: { type: 'array', items: { type: 'object', properties: { category: { type: 'string', enum: ['keywords', 'onpage', 'meta', 'technical', 'aeo'] }, title: { type: 'string' }, detail: { type: 'string' }, page_url: { type: ['string', 'null'] }, priority: { type: 'string', enum: ['high', 'medium', 'low'] }, effort_minutes: { type: 'integer' }, proposed: { type: 'object' } }, required: ['category', 'title', 'detail', 'priority', 'effort_minutes'] } } }, required: ['suggestions'] };
+const SUG_SCHEMA = { type: 'object', properties: { suggestions: { type: 'array', items: { type: 'object', properties: { category: { type: 'string', enum: ['keywords', 'onpage', 'meta', 'technical', 'aeo'] }, title: { type: 'string' }, detail: { type: 'string' }, page_url: { type: ['string', 'null'] }, priority: { type: 'string', enum: ['high', 'medium', 'low'] }, effort_minutes: { type: 'integer' }, strategy_score: { type: 'integer' }, strategy_note: { type: 'string' }, proposed: { type: 'object' } }, required: ['category', 'title', 'detail', 'priority', 'effort_minutes', 'strategy_score'] } } }, required: ['suggestions'] };
 const ALT_SCHEMA = { type: 'object', properties: { alts: { type: 'array', items: { type: 'object', properties: { i: { type: 'integer' }, alt: { type: 'string' } }, required: ['i', 'alt'] } } }, required: ['alts'] };
-const PLAN_SCHEMA = { type: 'object', properties: { summary: { type: 'string' }, items: { type: 'array', items: { type: 'object', properties: { type: { type: 'string', enum: ['suggestion', 'blog', 'alert', 'alt_text'] }, ref_id: { type: ['string', 'null'] }, title: { type: 'string' }, why: { type: 'string' }, minutes: { type: 'integer' }, steps: { type: 'array', items: { type: 'string' } } }, required: ['type', 'title', 'why', 'minutes'] } } }, required: ['summary', 'items'] };
+const PLAN_SCHEMA = { type: 'object', properties: { summary: { type: 'string' }, items: { type: 'array', items: { type: 'object', properties: { type: { type: 'string', enum: ['suggestion', 'blog', 'alert', 'alt_text', 'strategy'] }, ref_id: { type: ['string', 'null'] }, title: { type: 'string' }, why: { type: 'string' }, strategy_fit: { type: 'string' }, minutes: { type: 'integer' }, steps: { type: 'array', items: { type: 'string' } } }, required: ['type', 'title', 'why', 'strategy_fit', 'minutes'] } } }, required: ['summary', 'items'] };
+const SCORE_SCHEMA = { type: 'object', properties: { scores: { type: 'array', items: { type: 'object', properties: { i: { type: 'integer' }, score: { type: 'integer' }, note: { type: 'string' } }, required: ['i', 'score', 'note'] } } }, required: ['scores'] };
+const SCORE_GUIDE = 'Strategy score 0–5: 5 = directly serves a top priority in the strategy (and recurring, long-term customers); 4 = serves a listed priority; 3 = supports the hub, site health or authority in a way that helps the priorities; 2 = generic, neutral; 1 = mostly one-off or low-value traffic; 0 = goes against the strategy (a product or topic it says not to push, or breaks one of its rules).';
+
+// Score blog ideas and open suggestions against the current strategy (cheap; re-run whenever the strategy changes)
+async function scoreAgainstStrategy() {
+  const { data: ideas } = await db.from('blog_ideas').select('id,title,target_page,intent').in('status', ['idea', 'draft_ready']).is('strategy_score', null).limit(60);
+  const { data: sug } = await db.from('suggestions').select('id,title,detail,page_url').in('status', ['suggested', 'approved']).neq('category', 'images').is('strategy_score', null).limit(80);
+  const list = [...(ideas || []).map((x) => ({ t: 'blog_ideas', id: x.id, text: `Blog: ${x.title} (feeds ${x.target_page}) ${x.intent || ''}` })), ...(sug || []).map((x) => ({ t: 'suggestions', id: x.id, text: `Task: ${x.title} – ${x.detail || ''} (${x.page_url || ''})` }))];
+  if (!list.length) return 0;
+  const out = await claudeJSON({
+    model: MODEL_FAST, max_tokens: 4000, schema: SCORE_SCHEMA,
+    system: BRAND_BRIEF + '\n' + SCORE_GUIDE,
+    messages: [{ role: 'user', content: `Score each item against Baboodle's strategy. Note = under 15 words naming the priority it serves, or why it conflicts.\n${list.map((x, i) => `${i}. ${x.text.slice(0, 300)}`).join('\n')}` }],
+  });
+  for (const s of out.scores || []) {
+    const x = list[s.i]; if (!x) continue;
+    await db.from(x.t).update({ strategy_score: Math.max(0, Math.min(5, s.score)), strategy_note: s.note }).eq('id', x.id);
+  }
+  return (out.scores || []).length;
+}
+
+// This week's plan: fits in Katie's 3 hours, led by the strategy
+async function buildPlan() {
+  await scoreAgainstStrategy();
+  const { data: openNow } = await db.from('suggestions').select('id,category,title,detail,page_url,priority,effort_minutes,strategy_score,strategy_note').in('status', ['suggested', 'approved']).neq('category', 'images').order('created_at', { ascending: false }).limit(80);
+  const { count: altCount } = await db.from('suggestions').select('id', { count: 'exact', head: true }).eq('category', 'images').eq('status', 'suggested');
+  const { data: ideas } = await db.from('blog_ideas').select('id,title,status,expected_bookings,target_page,strategy_score,strategy_note').in('status', ['idea', 'draft_ready']).limit(30);
+  const { data: openAlerts } = await db.from('alerts').select('id,title,detail,severity').eq('resolved', false).order('created_at', { ascending: false }).limit(10);
+  const blocked = new Set([...(openNow || []), ...(ideas || [])].filter((x) => x.strategy_score === 0).map((x) => x.id));
+  const okSugs = (openNow || []).filter((x) => !blocked.has(x.id));
+  const okIdeas = (ideas || []).filter((x) => !blocked.has(x.id)).sort((a, b) => (b.strategy_score || 0) - (a.strategy_score || 0) || (b.expected_bookings || 0) - (a.expected_bookings || 0));
+  const plan = await claudeJSON({
+    model: MODEL_MAIN, max_tokens: 4000, schema: PLAN_SCHEMA,
+    system: BRAND_BRIEF + `\nYou plan Katie's SEO and AEO week. She has exactly 3 hours (180 minutes). The plan must move Baboodle's long-term strategy above, not just chase this month's traffic.
+Rules, in order:
+1. Only urgent alerts (site broken, key page lost, big drop) come first. Otherwise skip alerts.
+2. Spend at least two thirds of the time (120+ minutes) on work with strategy score 4–5. Strategy score beats expected bookings: "expected bookings" is worked out from searches where Baboodle already shows up, so it badly undercounts new priority areas (e.g. newborn, doubles, running) where Baboodle isn't visible yet. Recurring rental customers are worth far more than one-off hires.
+3. Never include anything the strategy says not to push, even if its numbers are big.
+4. If the options below don't cover a top priority well, add your own item (type "strategy", ref_id null) taken from the strategy's "content we want" or priority list, e.g. starting a data-led guide or improving a priority collection page, with concrete steps.
+5. Fill leftover time with quick wins (alt text batches, meta fixes) on priority pages first. Batch small similar jobs.
+6. Spread across at least two priorities where sensible, and keep one bigger piece at most (a blog takes ~60 min to review and publish once drafted; drafting is automatic).
+For every item, strategy_fit names the priority it serves in a few words (e.g. "Priority 1: double prams").`,
+    messages: [{ role: 'user', content: `Open alerts: ${JSON.stringify(openAlerts)}\nOpen suggestions (effort in minutes, strategy_score 0–5): ${JSON.stringify(okSugs)}\nAlt texts waiting: ${altCount}\nBlog ideas (sorted by strategy score): ${JSON.stringify(okIdeas)}\n\nReply as JSON {"summary":"one or two sentences on this week's focus and which strategy priorities it moves","items":[{"type":"suggestion|blog|alert|alt_text|strategy","ref_id":"id or null","title":"","why":"one sentence with the expected effect","strategy_fit":"","minutes":20,"steps":["short step"]}]} with total minutes ≤ 180.` }],
+  });
+  const items = (plan.items || []).filter((i) => !(i.ref_id && blocked.has(i.ref_id)));
+  const monday = new Date(); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  await db.from('weekly_plans').upsert({ week_of: monday.toISOString().slice(0, 10), budget_minutes: 180, summary: plan.summary || '', items, emailed_at: null }, { onConflict: 'week_of' });
+  return items.length;
+}
 
 const BOOKING_RATE = Number(process.env.BOOKING_RATE || 0.026); // search visitors who book (Shopify, pram hire, Oct–Nov 2026)
 const CTR_AT = [0, 0.28, 0.16, 0.11, 0.08, 0.065, 0.05, 0.04, 0.032, 0.027, 0.023];
@@ -70,8 +119,13 @@ exports.handler = async (event) => {
   // don't run two analyses at once (avoids duplicate suggestions)
   const { data: busy } = await db.from('runs').select('id').eq('job', 'analyze').eq('status', 'running').gte('started_at', new Date(Date.now() - 20 * 60000).toISOString()).limit(1);
   if (busy && busy.length) return json(200, { skipped: 'already running' });
+  const body = (() => { try { return JSON.parse(event.body || '{}'); } catch { return {}; } })();
   const run = await startRun('analyze');
   BRAND_BRIEF = await strategyBrief();
+  if (body.only === 'plan') {
+    try { const n = await buildPlan(); await endRun(run, 'ok', `Plan rebuilt around the strategy (${n} items)`); return json(200, { ok: true }); }
+    catch (e) { await endRun(run, 'error', 'plan: ' + e.message); return json(500, { error: e.message }); }
+  }
   try {
     const measured = await measure();
 
@@ -111,10 +165,10 @@ exports.handler = async (event) => {
     const sOut = await claudeJSON({
       model: MODEL_MAIN, max_tokens: 16000, schema: SUG_SCHEMA,
       system: BRAND_BRIEF + '\nYou are Baboodle\'s SEO and AEO strategist. Be specific: name the page, the search, the number. Prioritise by how much it moves Baboodle\'s strategy (long-term customers and the priority categories) and likely extra bookings. Do not repeat open suggestions or suggest undoing recent changes. Note: Search Console has no search-volume data, impressions are your demand signal.',
-      messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 10–15 new suggestions (keep each detail under 60 words and copy under 120 words) across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect, and which part of the strategy it serves","page_url":"/path or null","priority":"high|medium|low","effort_minutes":15,"proposed":{}}]}  (effort_minutes = realistic time for Katie to do it herself in Shopify, 5–90)` }],
+      messages: [{ role: 'user', content: `Here is this week's data (Search Console last 28 days, site scan, AI answer checks):\n${dataPack}\n\nWrite 10–15 new suggestions (keep each detail under 60 words and copy under 120 words) across these categories: "keywords" (searches to target or strengthen, with the page that should own them), "onpage" (content to add or change on a page, with a short draft of the copy in proposed.copy), "meta" (title/description rewrites where impressions are high but CTR is low for the position: proposed.title ≤60 chars and proposed.description ≤155 chars, plus proposed.current_title), "technical" (from the scan issues, grouped, highest impact first), "aeo" (what to add or change so AI answers cite Baboodle for questions marked missing/mentioned).\nReply as JSON: {"suggestions":[{"category":"...","title":"short headline with the key number","detail":"2-3 sentences: what, why, expected effect, and which part of the strategy it serves","page_url":"/path or null","priority":"high|medium|low","effort_minutes":15,"strategy_score":4,"strategy_note":"priority it serves","proposed":{}}]}  (effort_minutes = realistic time for Katie to do it herself in Shopify, 5–90). ${SCORE_GUIDE} At least two thirds of suggestions should score 4–5. Do not suggest anything that would score 0.` }],
     });
     sugs = (sOut.suggestions || []).filter((s) => s.title && s.category);
-    if (sugs.length) await db.from('suggestions').insert(sugs.map((s) => ({ category: s.category, title: s.title, detail: s.detail, page_url: s.page_url || null, priority: s.priority || 'medium', effort_minutes: s.effort_minutes || null, proposed: s.proposed || {} })));
+    if (sugs.length) await db.from('suggestions').insert(sugs.map((s) => ({ category: s.category, title: s.title, detail: s.detail, page_url: s.page_url || null, priority: s.priority || 'medium', effort_minutes: s.effort_minutes || null, strategy_score: s.strategy_score != null ? Math.max(0, Math.min(5, s.strategy_score)) : null, strategy_note: s.strategy_note || null, proposed: s.proposed || {} })));
 
     } catch (e) { errors.push('suggestions: ' + e.message); }
 
@@ -124,7 +178,7 @@ exports.handler = async (event) => {
       model: MODEL_MAIN, max_tokens: 16000,
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 6, user_location: { type: 'approximate', country: 'GB' } }],
       system: BRAND_BRIEF + '\nYou plan Baboodle\'s blog. Each post must win real searches parents make and lead readers to a hire page.',
-      messages: [{ role: 'user', content: `Search Console queries (last 28 days, with Baboodle's current position and page):\n${JSON.stringify(topQueries)}\nAI answer checks:\n${JSON.stringify(aeo)}\nExisting ideas (do not repeat): ${JSON.stringify(oldBlogs)}\n\nPropose the 4 best NEW blog posts. Prefer clusters with lots of impressions where Baboodle ranks below 8 or has no page that answers the search. Use web search to see what currently ranks in Google UK for the main search of each.\nReply as JSON: {"blogs":[{"title":"","target_page":"/collections/...","intent":"who is searching and why, 1-2 sentences","cluster":["exact queries from the list above that this post targets"],"extra_searches":["closely related searches people make, even if not in the list"],"questions":["People also ask style questions to answer"],"outline":["H2 sections in order"],"products":["products to feature"],"angle":"what makes it better than what ranks now","ranking":{"main_search":"","target_position":5,"timeframe":"3 months","difficulty":"low|medium|high","currently_ranking":[{"name":"","url":"","note":""}],"bonus":"snippet / People also ask / AI answers"},"conversion_path":"how readers get to a hire page and book"}]}` }],
+      messages: [{ role: 'user', content: `Search Console queries (last 28 days, with Baboodle's current position and page):\n${JSON.stringify(topQueries)}\nAI answer checks:\n${JSON.stringify(aeo)}\nExisting ideas (do not repeat): ${JSON.stringify(oldBlogs)}\n\nPropose the 4 best NEW blog posts for Baboodle's strategy. Start from the strategy's priorities and "content we want", then use the search data to pick the angle and the searches to target. Among on-strategy ideas, prefer clusters with lots of impressions where Baboodle ranks below 8 or has no page that answers the search. Never propose posts about products or topics the strategy says not to push. ${SCORE_GUIDE} Only propose posts scoring 4–5 (at most one scoring 3). Use web search to see what currently ranks in Google UK for the main search of each.\nReply as JSON: {"blogs":[{"title":"","target_page":"/collections/...","intent":"who is searching and why, 1-2 sentences","cluster":["exact queries from the list above that this post targets"],"extra_searches":["closely related searches people make, even if not in the list"],"questions":["People also ask style questions to answer"],"outline":["H2 sections in order"],"products":["products to feature"],"angle":"what makes it better than what ranks now","ranking":{"main_search":"","target_position":5,"timeframe":"3 months","difficulty":"low|medium|high","currently_ranking":[{"name":"","url":"","note":""}],"bonus":"snippet / People also ask / AI answers"},"conversion_path":"how readers get to a hire page and book","strategy_score":5,"strategy_note":"priority it serves"}]}` }],
     });
     blogs = parseJSON(claudeText(bResp)).blogs || [];
     for (const b of blogs) {
@@ -141,28 +195,14 @@ exports.handler = async (event) => {
         title: b.title, target_page: b.target_page, intent: b.intent, cluster: { queries: cluster, extra_searches: b.extra_searches || [], questions: b.questions || [] },
         total_demand: demand, outline: { sections: b.outline || [], products: b.products || [], angle: b.angle || '' }, ranking: b.ranking || {},
         conversion: { monthly_demand: demand, target_position: target, ctr: ctrAt(target), clicks, to_hire_page: toHire, booking_rate: BOOKING_RATE, bookings, path: b.conversion_path || '' },
-        expected_bookings: bookings, status: 'idea',
+        expected_bookings: bookings, status: 'idea', strategy_score: b.strategy_score != null ? Math.max(0, Math.min(5, b.strategy_score)) : null, strategy_note: b.strategy_note || null,
       });
     }
 
     } catch (e) { errors.push('blogs: ' + e.message); }
 
     try { alts = await altText(); } catch (e) { errors.push('alt text: ' + e.message); }
-    try {
-
-    // 3) This week's plan: fits in Katie's 3 hours
-    const { data: openNow } = await db.from('suggestions').select('id,category,title,detail,page_url,priority,effort_minutes').in('status', ['suggested', 'approved']).neq('category', 'images').order('created_at', { ascending: false }).limit(80);
-    const { count: altCount } = await db.from('suggestions').select('id', { count: 'exact', head: true }).eq('category', 'images').eq('status', 'suggested');
-    const { data: ideas } = await db.from('blog_ideas').select('id,title,status,expected_bookings,target_page').in('status', ['idea', 'draft_ready']).order('expected_bookings', { ascending: false }).limit(8);
-    const { data: openAlerts } = await db.from('alerts').select('id,title,detail,severity').eq('resolved', false).order('created_at', { ascending: false }).limit(10);
-    const plan = await claudeJSON({
-      model: MODEL_MAIN, max_tokens: 4000, schema: PLAN_SCHEMA,
-      system: BRAND_BRIEF + '\nYou plan Katie\'s SEO and AEO week. She has exactly 3 hours (180 minutes) a week. Pick the highest-impact work that fits, in the order she should do it. Fix urgent problems first, then quick wins with the most expected extra bookings, then one bigger piece (usually a blog). Batch small similar jobs (e.g. "25 alt texts, 20 min").',
-      messages: [{ role: 'user', content: `Open alerts: ${JSON.stringify(openAlerts)}\nOpen suggestions (with effort in minutes): ${JSON.stringify(openNow)}\nAlt texts waiting: ${altCount}\nBlog ideas (a blog takes ~60 min to review and publish once drafted; drafting is automatic): ${JSON.stringify(ideas)}\n\nReply as JSON {"summary":"one or two sentences on the focus this week","items":[{"type":"suggestion|blog|alert|alt_text","ref_id":"id or null","title":"","why":"one sentence with the expected effect","minutes":20,"steps":["short step"]}]} with total minutes ≤ 180.` }],
-    });
-    const monday = new Date(); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
-    await db.from('weekly_plans').upsert({ week_of: monday.toISOString().slice(0, 10), budget_minutes: 180, summary: plan.summary || '', items: plan.items || [], emailed_at: null }, { onConflict: 'week_of' });
-    } catch (e) { errors.push('plan: ' + e.message); }
+    try { await buildPlan(); } catch (e) { errors.push('plan: ' + e.message); }
     await endRun(run, errors.length ? 'partial' : 'ok', `${sugs.length} suggestions, ${blogs.length} blog ideas, ${alts} alt texts, ${measured} results measured${errors.length ? ' · problems: ' + errors.join(' | ') : ''}`);
     return json(200, { ok: true });
   } catch (e) {
