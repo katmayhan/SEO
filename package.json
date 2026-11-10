@@ -1,17 +1,10 @@
 {
-  "name": "baboodle-seo-dashboard",
-  "version": "1.0.0",
-  "description": "SEO & AEO dashboard for baboodle.co.uk — tracks rankings, actions, and AI search visibility",
-  "scripts": {
-    "dev": "netlify dev",
-    "build": "echo 'Static site — no build step required'",
-    "sync-gsc": "netlify functions:invoke gsc-sync",
-    "measure": "netlify functions:invoke measure-impact"
-  },
+  "name": "baboodle-search-brain",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Baboodle SEO and AEO brain: Search Console, site scan, AI answer checks, suggestions and blog drafts",
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.0"
-  },
-  "devDependencies": {
-    "netlify-cli": "^17.0.0"
+    "@supabase/supabase-js": "^2.45.0",
+    "cheerio": "^1.0.0"
   }
 }

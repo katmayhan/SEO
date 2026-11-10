@@ -1,16 +1,20 @@
 [build]
-  publish = "."
+  publish = "public"
   functions = "netlify/functions"
 
-[functions."gsc-sync"]
-  schedule = "0 6 * * *"
+[functions]
+  node_bundler = "esbuild"
+  included_files = ["lib/**"]
 
-[functions."measure-impact"]
-  schedule = "0 7 * * *"
+[functions."cron-daily"]
+  schedule = "40 5 * * *"
+
+[functions."cron-weekly"]
+  schedule = "20 6 * * 1"
 
 [[redirects]]
   from = "/auth/callback"
-  to = "/auth-callback.html"
+  to = "/.netlify/functions/gsc-auth"
   status = 200
 
 [[redirects]]
@@ -21,4 +25,6 @@
 [[headers]]
   for = "/*"
   [headers.values]
-    Cache-Control = "no-cache, no-store, must-revalidate"
+    Cache-Control = "no-cache"
+    X-Robots-Tag = "noindex, nofollow"
+    X-Frame-Options = "DENY"

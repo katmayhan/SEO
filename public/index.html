@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Baboodle search brain</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Teachers:wght@400;500;600;700&family=Young+Serif&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="gate" class="gate" hidden>
+  <form id="gate-form" class="gate__card">
+    <div class="logo">baboodle</div>
+    <h1>Search brain</h1>
+    <p class="soft">Enter the dashboard password.</p>
+    <input id="gate-pass" type="password" autocomplete="current-password" placeholder="Password" required>
+    <p id="gate-err" class="err" hidden>That password didn't work. Try again.</p>
+    <button class="btn btn--coral" type="submit">Open dashboard</button>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header class="top">
+    <div class="top__inner">
+      <div class="brand"><span class="logo">baboodle</span><span class="brand__tag">search brain</span></div>
+      <div class="top__status" id="status"></div>
+    </div>
+    <nav class="tabs" id="tabs" aria-label="Sections"></nav>
+  </header>
+  <main class="wrap" id="view" tabindex="-1"></main>
+  <div id="toast" class="toast" hidden></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
